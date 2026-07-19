@@ -1,3 +1,4 @@
+import time
 import random
 import uuid
 from unittest.mock import patch
@@ -321,3 +322,47 @@ class SchedulingAdminApiTests(SchedulingApiTestMixin, TestCase):
             self.assertIn(entry.day_of_week, [1, 2, 3, 4, 5])
             self.assertNotEqual(entry.period, 5)
             self.assertEqual(entry.week, 1)
+
+
+class SchedulingPerformanceTests(SchedulingApiTestMixin, TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin_user = User.objects.create_user(
+            username="schedule-performance-admin",
+            password="secret123",
+        )
+        Profile.objects.create(user=self.admin_user, role="ADMIN", name="Schedule Performance Admin")
+        self.client.force_authenticate(self.admin_user)
+
+        self.teacher = Teacher.objects.create(name="Perf Teacher", employee_no="SP001")
+        self.second_teacher = Teacher.objects.create(name="Perf Teacher 2", employee_no="SP002")
+        self.classroom = Classroom.objects.create(name="Perf Room 1", capacity=80)
+        self.second_classroom = Classroom.objects.create(name="Perf Room 2", capacity=90)
+        self.course = self.create_course("Perf Schedule Course")
+        self.second_course = self.create_course("Perf Schedule Course 2")
+        self.course.teachers.add(self.teacher)
+        self.second_course.teachers.add(self.second_teacher)
+
+    def test_generate_endpoint_performance_smoke(self):
+        started_at = time.perf_counter()
+        response = self.client.post(
+            "/api/v1/admin/schedule/generate/",
+            {
+                "plan_name": "Performance Smoke",
+                "semester": "2026-1",
+                "major_ids": [],
+                "algorithm_config": {
+                    "population_size": 10,
+                    "max_generations": 5,
+                    "mutation_rate": 0.08,
+                    "crossover_rate": 0.8,
+                    "total_weeks": 1,
+                },
+            },
+            format="json",
+        )
+        duration = time.perf_counter() - started_at
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data["status"], "SUCCESS")
+        self.assertLess(duration, 8.0)

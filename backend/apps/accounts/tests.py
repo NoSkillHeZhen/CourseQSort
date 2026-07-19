@@ -12,6 +12,28 @@ class AuthApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
 
+    def _create_student_user(self, username=None):
+        username = username or f"user-{uuid.uuid4().hex[:8]}"
+        user = User.objects.create_user(
+            username=username,
+            password="secret123",
+            email=f"{username}@example.com",
+        )
+        Profile.objects.create(
+            user=user,
+            role="STUDENT",
+            name="Student One",
+            major="Computer Science",
+        )
+        return user
+
+    def _login(self, username):
+        return self.client.post(
+            "/api/v1/auth/login/",
+            {"username": username, "password": "secret123"},
+            format="json",
+        )
+
     def test_register_binds_existing_student_record(self):
         student = Student.objects.create(name="Alice", student_no="S001")
 
@@ -40,23 +62,8 @@ class AuthApiTests(TestCase):
         self.assertEqual(student.user_id, user.id)
 
     def test_login_and_me_return_profile_data(self):
-        user = User.objects.create_user(
-            username="student1",
-            password="secret123",
-            email="student1@example.com",
-        )
-        Profile.objects.create(
-            user=user,
-            role="STUDENT",
-            name="Student One",
-            major="Computer Science",
-        )
-
-        login_response = self.client.post(
-            "/api/v1/auth/login/",
-            {"username": "student1", "password": "secret123"},
-            format="json",
-        )
+        user = self._create_student_user("student1")
+        login_response = self._login(user.username)
 
         self.assertEqual(login_response.status_code, 200)
         self.assertIn("access", login_response.data)
@@ -82,3 +89,49 @@ class AuthApiTests(TestCase):
 
         self.assertEqual(response.status_code, 401)
         self.assertIn("detail", response.data)
+
+    def test_refresh_returns_new_access_token(self):
+        user = self._create_student_user("refresh-user")
+        login_response = self._login(user.username)
+
+        response = self.client.post(
+            "/api/v1/auth/refresh/",
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("access", response.data)
+
+    def test_logout_blacklists_refresh_token(self):
+        user = self._create_student_user("logout-user")
+        login_response = self._login(user.username)
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {login_response.data['access']}")
+        logout_response = self.client.post(
+            "/api/v1/auth/logout/",
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(logout_response.status_code, 200)
+
+        self.client.credentials()
+        refresh_response = self.client.post(
+            "/api/v1/auth/refresh/",
+            {"refresh": login_response.data["refresh"]},
+            format="json",
+        )
+
+        self.assertEqual(refresh_response.status_code, 401)
+
+    def test_me_rejects_tampered_access_token(self):
+        user = self._create_student_user("tamper-user")
+        login_response = self._login(user.username)
+        access_token = login_response.data["access"]
+        tampered_token = access_token[:-1] + ("A" if access_token[-1] != "A" else "B")
+
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tampered_token}")
+        response = self.client.get("/api/v1/auth/me/")
+
+        self.assertEqual(response.status_code, 401)

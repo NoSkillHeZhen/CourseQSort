@@ -1,7 +1,10 @@
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 from django.contrib.auth.models import User
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from rest_framework.test import APIClient
 
 from apps.accounts.models import Profile
@@ -189,6 +192,12 @@ class StudentCourseApiTests(StudentTestMixin, TestCase):
         self.assertEqual(response.data["status"], "SELECTED")
         self.assertTrue(Enrollment.objects.filter(user=self.user, course=self.available_course).exists())
 
+    def test_course_list_handles_injection_like_keyword_without_server_error(self):
+        response = self.client.get("/api/v1/student/courses/", {"keyword": "' OR 1=1 --"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("results", response.data)
+
 
 class AdminCourseApiTests(StudentTestMixin, TestCase):
     def setUp(self):
@@ -217,3 +226,83 @@ class AdminCourseApiTests(StudentTestMixin, TestCase):
         response = self.client.get("/api/v1/admin/courses/")
 
         self.assertEqual(response.status_code, 403)
+
+
+class StudentCourseConcurrencyTests(StudentTestMixin, TransactionTestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="concurrency-user", password="secret123")
+        Profile.objects.create(user=self.user, role="STUDENT", name="Concurrency User")
+
+        self.teacher = Teacher.objects.create(name="Teacher D", employee_no="T004")
+        self.room = Classroom.objects.create(name="Room 301", capacity=60)
+        self.course = self.create_course("Concurrent Course", expected_student_count=5)
+        CourseScheduleItem.objects.create(
+            course=self.course,
+            teacher=self.teacher,
+            classroom=self.room,
+            day_of_week=2,
+            period=2,
+        )
+
+    def _post_select(self, barrier):
+        client = APIClient()
+        client.force_authenticate(self.user)
+        barrier.wait()
+        response = client.post(f"/api/v1/student/courses/{self.course.id}/select/")
+        return response.status_code, response.data
+
+    def test_concurrent_duplicate_selection_keeps_single_enrollment(self):
+        barrier = Barrier(2)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(lambda _: self._post_select(barrier), range(2)))
+
+        self.assertEqual(
+            sorted(status_code for status_code, _ in results),
+            [201, 409],
+        )
+        self.assertEqual(Enrollment.objects.filter(user=self.user, course=self.course).count(), 1)
+        self.assertIn(
+            "ALREADY_SELECTED",
+            [payload["status"] for _, payload in results if payload["status"] != "SELECTED"],
+        )
+
+
+class StudentCoursePerformanceTests(StudentTestMixin, TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="performance-user", password="secret123")
+        Profile.objects.create(user=self.user, role="STUDENT", name="Performance User")
+        self.client.force_authenticate(self.user)
+
+        self.teacher = Teacher.objects.create(name="Teacher E", employee_no="T005")
+        self.room = Classroom.objects.create(name="Room 401", capacity=80)
+
+        enrolled_course = self.create_course("Baseline Course")
+        CourseScheduleItem.objects.create(
+            course=enrolled_course,
+            teacher=self.teacher,
+            classroom=self.room,
+            day_of_week=1,
+            period=1,
+        )
+        Enrollment.objects.create(user=self.user, course=enrolled_course)
+
+        for index in range(80):
+            course = self.create_course(f"Perf Course {index:02d}")
+            CourseScheduleItem.objects.create(
+                course=course,
+                teacher=self.teacher,
+                classroom=self.room,
+                day_of_week=(index % 5) + 1,
+                period=(index % 4) + 1,
+            )
+
+    def test_course_list_performance_smoke(self):
+        started_at = time.perf_counter()
+        response = self.client.get("/api/v1/student/courses/")
+        duration = time.perf_counter() - started_at
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 81)
+        self.assertLess(duration, 5.0)

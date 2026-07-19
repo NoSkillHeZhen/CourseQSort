@@ -1,3 +1,4 @@
+import time
 import uuid
 from unittest.mock import patch
 
@@ -176,3 +177,47 @@ class ConflictAnalysisApiTests(ConflictAnalysisTestMixin, TestCase):
         )
         self.assertEqual(pair.conflicting_student_count, 1)
         self.assertAlmostEqual(pair.conflict_rate, 0.33, places=2)
+
+
+class ConflictAnalysisPerformanceTests(ConflictAnalysisTestMixin, TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin_user = User.objects.create_user(
+            username="conflict-performance-admin",
+            password="secret123",
+        )
+        Profile.objects.create(user=self.admin_user, role="ADMIN", name="Conflict Performance Admin")
+        self.client.force_authenticate(self.admin_user)
+
+        self.courses = [self.create_course(f"Performance Course {index}") for index in range(6)]
+
+    def test_run_endpoint_performance_smoke(self):
+        from apps.courses.models import CourseScheduleItem
+
+        for index, course in enumerate(self.courses):
+            CourseScheduleItem.objects.create(
+                course=course,
+                day_of_week=(index % 5) + 1,
+                period=(index % 4) + 1,
+            )
+            CourseScheduleItem.objects.create(
+                course=course,
+                day_of_week=((index + 1) % 5) + 1,
+                period=((index + 1) % 4) + 1,
+            )
+
+        started_at = time.perf_counter()
+        response = self.client.post(
+            "/api/v1/admin/conflict-analysis/run/",
+            {
+                "semester": "2026-1",
+                "course_ids": [course.id for course in self.courses],
+                "threshold": 1,
+            },
+            format="json",
+        )
+        duration = time.perf_counter() - started_at
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.data["status"], "SUCCESS")
+        self.assertLess(duration, 5.0)

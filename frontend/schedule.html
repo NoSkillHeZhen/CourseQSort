@@ -12,14 +12,31 @@
         th { background-color: #f0f0f0; }
         .empty { color: #ccc; }
         .no-print { margin-bottom: 15px; }
-        @media print { .no-print { display: none; } }
+        @media print {
+            @page { size: A4 landscape; margin: 8mm; }
+            body { font-size: 13px; }
+            .no-print { display: none; }
+            table { min-width: auto; font-size: 12px; }
+            thead { display: table-header-group; }
+            tr { page-break-inside: avoid; break-inside: avoid; }
+            td { height: auto; min-height: 32px; padding: 4px 6px; vertical-align: top; }
+            th { padding: 6px; }
+            hr { margin: 1px 0; }
+        }
         .loading { text-align: center; padding: 40px; color: #666; }
     </style>
+    <script src="js/api.js"></script>
+    <script>
+        // 登录守卫：未登录时退回登录页（角色由后端 API 权限控制）
+        if (!CourseQSortAPI.isMockMode() && !CourseQSortAPI.isAuthenticated()) {
+            window.location.replace('index.html');
+        }
+    </script>
 </head>
 <body>
     <div class="no-print">
         <button onclick="window.print()">打印课表</button>
-        <button onclick="window.location.href='index.html'">返回选课</button>
+        <button onclick="window.location.href='student.html'">返回选课</button>
         <span id="data-mode-badge" style="margin-left:10px; color:#999; font-size:12px;"></span>
     </div>
 
@@ -39,7 +56,6 @@
         <tbody id="schedule-body"></tbody>
     </table>
 
-    <script src="js/api.js"></script>
     <script>
         (function() {
             var name = sessionStorage.getItem('studentName') || '未知';
@@ -61,11 +77,33 @@
 
                 courses.forEach(function(c) {
                     var slots = c.time_slots || [];
+                    // 为每个 time_slot 找到对应的 segment（如果有）
+                    function getSlotInfo(dayIdx, periodIdx) {
+                        var info = { classroom: c.classroom || '', weeks: '' };
+                        if (c.segments && c.segments.length > 1) {
+                            for (var si = 0; si < c.segments.length; si++) {
+                                var seg = c.segments[si];
+                                var found = (seg.time_slots || []).some(function(s) {
+                                    return ((s.day_of_week || s.day || 1) - 1) === dayIdx && s.period === (periodIdx + 1);
+                                });
+                                if (found) {
+                                    info.classroom = seg.classroom || info.classroom;
+                                    info.weeks = (seg.week_start === seg.week_end) ?
+                                        seg.week_start + '周' : seg.week_start + '-' + seg.week_end + '周';
+                                    break;
+                                }
+                            }
+                        }
+                        return info;
+                    }
                     slots.forEach(function(slot) {
                         var dayIdx = (slot.day_of_week || slot.day || 1) - 1;
                         var periodIdx = slot.period - 1;
                         if (dayIdx >= 0 && dayIdx < 5 && periodIdx >= 0 && periodIdx < 11) {
+                            var info = getSlotInfo(dayIdx, periodIdx);
                             var label = c.name + '<br><small>' + (c.teacher || '') + '</small>';
+                            if (info.classroom) label += '<br><small class="text-muted">' + info.classroom + '</small>';
+                            if (info.weeks) label += '<br><small class="text-muted">' + info.weeks + '</small>';
                             if (schedule[dayIdx][periodIdx]) {
                                 schedule[dayIdx][periodIdx] += '<hr style="margin:2px 0">' + label;
                             } else {

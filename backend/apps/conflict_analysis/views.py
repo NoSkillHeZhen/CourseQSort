@@ -33,11 +33,15 @@ class RunAnalysisView(viewsets.ViewSet):
             status="PENDING",
         )
 
+        # 异步线程执行，立即返回给前端轮询
+        import threading
+
         from apps.conflict_analysis.tasks import run_analysis_sync
 
-        run_analysis_sync(str(task.task_id))
+        task_id = str(task.task_id)
+        thread = threading.Thread(target=run_analysis_sync, args=(task_id,), daemon=True)
+        thread.start()
 
-        task.refresh_from_db()
         return Response(
             {
                 "task_id": str(task.task_id),

@@ -1,16 +1,117 @@
 import time
+from collections import defaultdict
 
 from django.db import IntegrityError, OperationalError, transaction
+from django.db.models import F, Q
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.accounts.permissions import IsStudentUser
-from apps.courses.models import Course, Major
+from apps.courses.models import Course, CourseAssignment, Student
 from apps.student.bitmap import build_bitmap, has_conflict
 from apps.student.models import Enrollment
 from apps.student.recommendation import recommend_courses
+
+SELECT_RETRY_COUNT = 3
+SELECT_RETRY_DELAY_SECONDS = 0.05
+
+
+def _is_course_required_for_user(course, user):
+    """检查课程对某用户是否必修（基于 CourseAssignment 规则）"""
+    try:
+        student = Student.objects.get(user=user)
+    except Student.DoesNotExist:
+        return False
+
+    # 构建查询条件：匹配专业 + 年级 + 班级
+    q = Q(course=course)
+    # 专业匹配（允许 null 表示不限专业，但必须有匹配规则）
+    q &= Q(major=student.major) | Q(major__isnull=True)
+    # 年级匹配
+    q &= Q(grade=student.grade) | Q(grade="")
+    # 班级匹配
+    q &= Q(class_identification=student.class_identification) | Q(class_identification="")
+
+    return CourseAssignment.objects.filter(q).exists()
+
+
+def _build_segments(items, default_teacher=""):
+    """
+    将 CourseScheduleItem 列表合并为 segments。
+    逐周对比课表快照，只按时间段（星期+节次）判断是否相同，
+    相同时间段的连续周合并为一个 segment（忽略教室、教师的差异）。
+    """
+    if not items:
+        return [], ""
+
+    # 第一步：逐周建立完整快照（含教室/教师，用于最终展示）
+    week_full = defaultdict(set)
+
+    for item in items:
+        ws = item.week_start or 1
+        we = item.week_end or 18
+        cr = item.classroom.name if item.classroom else ""
+        t = item.teacher.name if item.teacher else default_teacher
+
+        for w in range(ws, we + 1):
+            week_full[w].add((item.day_of_week, item.period, cr, t))
+
+    if not week_full:
+        return [], ""
+
+    # 第二步：只按"星期几"做比较 key，忽略节次/教室/教师差异
+    week_key = {}
+    for w, s in week_full.items():
+        week_key[w] = tuple(sorted(set(dow for dow, _period, _cr, _t in s)))
+
+    sorted_weeks = sorted(week_key.keys())
+
+    # 第三步：合并连续且时间段相同的周
+    segments = []
+    seg_start = sorted_weeks[0]
+    prev_key = week_key[seg_start]
+    prev_full = week_full[seg_start]
+
+    for i in range(1, len(sorted_weeks)):
+        w = sorted_weeks[i]
+        if w == sorted_weeks[i - 1] + 1 and week_key[w] == prev_key:
+            continue
+        _finish_segment(segments, seg_start, sorted_weeks[i - 1], prev_full)
+        seg_start = w
+        prev_key = week_key[w]
+        prev_full = week_full[w]
+
+    _finish_segment(segments, seg_start, sorted_weeks[-1], prev_full)
+
+    first_cls = segments[0]["classroom"] if segments else ""
+    return segments, first_cls
+
+
+def _finish_segment(segments, ws, we, slot_data):
+    """将一组 (dow, period, classroom, teacher) 转为 segment。
+    slot_data 是 set。
+    """
+    time_slots = []
+    classroom = ""
+    teacher = ""
+    for dow, period, cr, t in sorted(slot_data):
+        time_slots.append({"day_of_week": dow, "period": period})
+        if cr and not classroom:
+            classroom = cr
+        if t and not teacher:
+            teacher = t
+
+    segments.append(
+        {
+            "week_start": ws,
+            "week_end": we,
+            "time_slots": time_slots,
+            "classroom": classroom,
+            "teacher": teacher,
+        }
+    )
 
 
 class ScheduleView(APIView):
@@ -27,19 +128,25 @@ class ScheduleView(APIView):
             time_slots = [(item.day_of_week, item.period) for item in items]
             slots.update(time_slots)
 
+            teacher_name = ""
             first_teacher = course.teachers.first()
-            teacher_name = first_teacher.name if first_teacher else ""
+            if first_teacher:
+                teacher_name = first_teacher.name
 
-            first_item = items.first()
-            classroom_name = first_item.classroom.name if first_item and first_item.classroom else ""
+            # 使用逐周对比合并算法构建 segments
+            segments, classroom_name = _build_segments(items, teacher_name)
 
+            is_mandatory = _is_course_required_for_user(course, request.user)
             courses_data.append(
                 {
                     "course_id": course.id,
                     "name": course.name,
+                    "credit": course.credit,
                     "teacher": teacher_name,
                     "time_slots": [{"day_of_week": day, "period": period} for day, period in time_slots],
                     "classroom": classroom_name,
+                    "mandatory": is_mandatory,
+                    "segments": segments,
                 }
             )
 
@@ -59,6 +166,8 @@ class CourseListView(APIView):
     def get(self, request):
         major_id = request.query_params.get("major")
         keyword = request.query_params.get("keyword")
+        page = int(request.query_params.get("page", 1))
+        page_size = int(request.query_params.get("page_size", 20))
 
         user_slots = set()
         for enrollment in Enrollment.objects.filter(user=request.user).select_related("course"):
@@ -72,35 +181,46 @@ class CourseListView(APIView):
         if keyword:
             courses = courses.filter(name__icontains=keyword)
 
+        # 分页
+        total_count = courses.count()
+        start = (page - 1) * page_size
+        courses = courses[start : start + page_size]
+
         results = []
-        for course in courses:
-            time_slots_raw = list({(item.day_of_week, item.period) for item in course.schedule_items.all()})
+        for c in courses:
+            items = c.schedule_items.all()
+            time_slots_raw = list(set((item.day_of_week, item.period) for item in items))
             course_bitmap = build_bitmap(time_slots_raw)
             conflict = has_conflict(user_bitmap, course_bitmap)
 
             conflict_with = []
             if conflict:
                 for enrollment in Enrollment.objects.filter(user=request.user).select_related("course"):
-                    enrollment_slots = {
+                    enrollment_slots = set(
                         (item.day_of_week, item.period) for item in enrollment.course.schedule_items.all()
-                    }
+                    )
                     overlap = enrollment_slots & set(time_slots_raw)
                     if overlap:
                         conflict_with.append(
                             {
                                 "course_id": enrollment.course.id,
                                 "name": enrollment.course.name,
-                                "time_slots": [
-                                    {"day_of_week": day, "period": period} for day, period in overlap
-                                ],
+                                "time_slots": [{"day_of_week": day, "period": period} for day, period in overlap],
                             }
                         )
 
-            first_teacher = course.teachers.first()
-            teacher_name = first_teacher.name if first_teacher else ""
-            enrolled_count = course.enrollments.count()
-            capacity = course.expected_student_count or 9999
+            teacher_name = ""
+            first_teacher = c.teachers.first()
+            if first_teacher:
+                teacher_name = first_teacher.name
 
+            # 使用逐周对比合并算法构建 segments
+            segments, classroom_name = _build_segments(items, teacher_name)
+
+            enrolled_count = c.enrollments.count()
+            capacity = c.expected_student_count or 9999
+
+            is_mandatory = _is_course_required_for_user(c, request.user)
             results.append(
                 {
                     "course_id": course.id,
@@ -109,14 +229,17 @@ class CourseListView(APIView):
                     "teacher": teacher_name,
                     "capacity": capacity,
                     "enrolled_count": enrolled_count,
-                    "time_slots": [{"day_of_week": day, "period": period} for day, period in time_slots_raw],
+                    "time_slots": [{"day_of_week": d, "period": p} for d, p in time_slots_raw],
+                    "classroom": classroom_name,
+                    "segments": segments,
                     "remaining_capacity": capacity - enrolled_count,
                     "conflict": conflict,
                     "conflict_with": conflict_with,
+                    "mandatory": is_mandatory,
                 }
             )
 
-        return Response({"count": len(results), "results": results})
+        return Response({"count": total_count, "results": results})
 
 
 class ConflictDetailView(APIView):
@@ -134,15 +257,17 @@ class ConflictDetailView(APIView):
         conflict_courses = []
         conflict_slots = set()
         for enrollment in Enrollment.objects.filter(user=request.user).select_related("course"):
-            enrollment_slots = {(item.day_of_week, item.period) for item in enrollment.course.schedule_items.all()}
+            enrollment_slots = set((item.day_of_week, item.period) for item in enrollment.course.schedule_items.all())
             overlap = enrollment_slots & set(course_slots_raw)
             if overlap:
                 for day, period in overlap:
                     conflict_slots.add((day, period))
                     first_item = enrollment.course.schedule_items.filter(day_of_week=day, period=period).first()
                     classroom_name = first_item.classroom.name if first_item and first_item.classroom else ""
+                    teacher_name = ""
                     first_teacher = enrollment.course.teachers.first()
-                    teacher_name = first_teacher.name if first_teacher else ""
+                    if first_teacher:
+                        teacher_name = first_teacher.name
                     conflict_courses.append(
                         {
                             "course_id": enrollment.course.id,
@@ -171,53 +296,59 @@ class SelectCourseView(APIView):
     permission_classes = [IsAuthenticated, IsStudentUser]
 
     def post(self, request, pk=None):
-        for attempt in range(3):
+        for attempt in range(SELECT_RETRY_COUNT):
             try:
                 with transaction.atomic():
-                    course = Course.objects.select_for_update().prefetch_related("schedule_items").get(id=pk)
+                    locked_rows = Course.objects.filter(id=pk).update(
+                        expected_student_count=F("expected_student_count")
+                    )
+                    if not locked_rows:
+                        return Response({"detail": "Course not found"}, status=status.HTTP_404_NOT_FOUND)
+
+                    course = Course.objects.prefetch_related("schedule_items").get(id=pk)
 
                     if Enrollment.objects.filter(user=request.user, course=course).exists():
                         return Response(
                             {
                                 "course_id": course.id,
                                 "status": "ALREADY_SELECTED",
-                                "message": "Already selected",
+                                "message": "已选择该课程",
                             },
                             status=status.HTTP_409_CONFLICT,
                         )
 
                     capacity = course.expected_student_count or 9999
-                    if course.enrollments.count() >= capacity:
+                    enrolled_count = Enrollment.objects.filter(course=course).count()
+                    if enrolled_count >= capacity:
                         return Response(
                             {
                                 "course_id": course.id,
                                 "status": "FULL",
-                                "message": f"The course is full ({capacity}/{capacity})",
+                                "message": f"该课程容量已满（{capacity}/{capacity}）",
                             },
                             status=status.HTTP_409_CONFLICT,
                         )
 
+                    current_enrollments = list(Enrollment.objects.filter(user=request.user).select_related("course"))
                     user_slots = set()
-                    for enrollment in Enrollment.objects.filter(user=request.user).select_related("course"):
+                    for enrollment in current_enrollments:
                         for item in enrollment.course.schedule_items.all():
                             user_slots.add((item.day_of_week, item.period))
 
-                    course_slots = {(item.day_of_week, item.period) for item in course.schedule_items.all()}
-                    overlap = user_slots & course_slots
-                    if overlap:
+                    course_slots = set((item.day_of_week, item.period) for item in course.schedule_items.all())
+                    if user_slots & course_slots:
                         conflict_names = []
-                        for enrollment in Enrollment.objects.filter(user=request.user).select_related("course"):
-                            enrollment_slots = {
+                        for enrollment in current_enrollments:
+                            enrollment_slots = set(
                                 (item.day_of_week, item.period) for item in enrollment.course.schedule_items.all()
-                            }
+                            )
                             if enrollment_slots & course_slots:
                                 conflict_names.append(enrollment.course.name)
-
                         return Response(
                             {
                                 "course_id": course.id,
                                 "status": "CONFLICT",
-                                "message": f'Time conflict with selected courses: {", ".join(conflict_names)}',
+                                "message": f'课程时间与已选课程「{"、".join(conflict_names)}」冲突',
                             },
                             status=status.HTTP_409_CONFLICT,
                         )
@@ -227,41 +358,33 @@ class SelectCourseView(APIView):
                         {
                             "course_id": course.id,
                             "status": "SELECTED",
-                            "message": "Selected",
+                            "message": "选课成功",
                         },
                         status=status.HTTP_201_CREATED,
                     )
-            except Course.DoesNotExist:
-                return Response({"detail": "Course not found"}, status=status.HTTP_404_NOT_FOUND)
             except IntegrityError:
                 return Response(
                     {
                         "course_id": pk,
                         "status": "ALREADY_SELECTED",
-                        "message": "Already selected",
+                        "message": "已选择该课程",
                     },
                     status=status.HTTP_409_CONFLICT,
                 )
-            except OperationalError:
-                if attempt == 2:
-                    if Enrollment.objects.filter(user=request.user, course_id=pk).exists():
-                        return Response(
-                            {
-                                "course_id": pk,
-                                "status": "ALREADY_SELECTED",
-                                "message": "Already selected",
-                            },
-                            status=status.HTTP_409_CONFLICT,
-                        )
-                    return Response(
-                        {
-                            "course_id": pk,
-                            "status": "BUSY",
-                            "message": "Selection is busy, please retry",
-                        },
-                        status=status.HTTP_409_CONFLICT,
-                    )
-                time.sleep(0.05)
+            except OperationalError as exc:
+                if "locked" in str(exc).lower() and attempt < SELECT_RETRY_COUNT - 1:
+                    time.sleep(SELECT_RETRY_DELAY_SECONDS)
+                    continue
+                raise
+
+        return Response(
+            {
+                "course_id": pk,
+                "status": "RETRY_LATER",
+                "message": "当前选课请求过于频繁，请稍后重试",
+            },
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
 
 
 class DropCourseView(APIView):
@@ -272,6 +395,17 @@ class DropCourseView(APIView):
             course = Course.objects.get(id=pk)
         except Course.DoesNotExist:
             return Response({"detail": "Course not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # 检查是否为必修课
+        if _is_course_required_for_user(course, request.user):
+            return Response(
+                {
+                    "course_id": course.id,
+                    "status": "REQUIRED",
+                    "message": "必修课不可退",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         deleted, _ = Enrollment.objects.filter(user=request.user, course=course).delete()
         if not deleted:

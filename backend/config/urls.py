@@ -10,4 +10,5 @@ urlpatterns = [
     path("api/v1/admin/", include("apps.conflict_analysis.urls")),
     path("api/v1/admin/", include("apps.algorithm_config.urls")),
     path("api/v1/student/", include("apps.student.urls")),
+    path("api/v1/teacher/", include("apps.courses.teacher_urls")),
 ]

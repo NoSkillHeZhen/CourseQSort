@@ -15,39 +15,38 @@
                 <div class="card-body">
                     <h4 class="text-center mb-3">注册账号</h4>
                     <p class="text-muted small text-center mb-3">
-                        请使用真实姓名注册，系统将自动绑定教务已录入的个人信息
+                        请使用真实姓名和学号/工号注册，系统将自动绑定教务已录入的个人信息
                     </p>
 
                     <!-- 角色选择 -->
                     <div class="btn-group w-100 mb-3" role="group">
-                        <button type="button" class="btn btn-outline-primary active" id="reg-role-student">🎓 学生注册</button>
-                        <button type="button" class="btn btn-outline-info" id="reg-role-teacher">👨‍🏫 教师注册</button>
+                        <button type="button" class="btn btn-outline-primary active" id="reg-role-student">
+                            <i class="bi bi-mortarboard"></i> 学生注册
+                        </button>
+                        <button type="button" class="btn btn-outline-info" id="reg-role-teacher">
+                            <i class="bi bi-person-workspace"></i> 教师注册
+                        </button>
                     </div>
 
-                    <!-- 注册表单 -->
+                    <!-- 注册表单（仅需学号/工号+姓名+密码） -->
                     <form id="register-form">
                         <div class="mb-2">
-                            <label for="reg-username" class="form-label small">用户名 <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control form-control-sm" id="reg-username"
-                                   placeholder="3-50个字符，用于登录" required minlength="3" maxlength="50">
-                        </div>
-                        <div class="mb-2">
-                            <label for="reg-password" class="form-label small">密码 <span class="text-danger">*</span></label>
-                            <input type="password" class="form-control form-control-sm" id="reg-password"
-                                   placeholder="至少6位" required minlength="6">
+                            <label for="reg-identifier" class="form-label small" id="reg-identifier-label">
+                                学号 <span class="text-danger">*</span>
+                            </label>
+                            <input type="text" class="form-control form-control-sm" id="reg-identifier"
+                                   placeholder="请输入学号（教务已录入）" required>
+                            <small class="text-muted" id="reg-identifier-hint">教务已录入的学号，将作为登录用户名</small>
                         </div>
                         <div class="mb-2">
                             <label for="reg-name" class="form-label small">真实姓名 <span class="text-danger">*</span></label>
                             <input type="text" class="form-control form-control-sm" id="reg-name"
                                    placeholder="请输入真实姓名（需与教务录入一致）" required>
                         </div>
-                        <div class="mb-3" id="reg-identifier-group">
-                            <label for="reg-identifier" class="form-label small" id="reg-identifier-label">
-                                学号 <span class="text-danger">*</span>
-                            </label>
-                            <input type="text" class="form-control form-control-sm" id="reg-identifier"
-                                   placeholder="请输入学号" required>
-                            <small class="text-muted" id="reg-identifier-hint">教务已录入的学生学号</small>
+                        <div class="mb-2">
+                            <label for="reg-password" class="form-label small">密码 <span class="text-danger">*</span></label>
+                            <input type="password" class="form-control form-control-sm" id="reg-password"
+                                   placeholder="至少6位" required minlength="6">
                         </div>
 
                         <div class="d-grid mb-2">
@@ -58,7 +57,7 @@
                     </form>
 
                     <div class="text-center mt-2">
-                        <small>已有账号？<a href="login.html">返回登录</a></small>
+                        <small>已有账号？<a href="index.html">返回登录</a></small>
                     </div>
                 </div>
             </div>
@@ -69,7 +68,7 @@
 <script src="js/api.js"></script>
 <script>
 (function() {
-    var currentRole = 'STUDENT'; // STUDENT | TEACHER
+    var currentRole = 'STUDENT';
     var roleStudentBtn = document.getElementById('reg-role-student');
     var roleTeacherBtn = document.getElementById('reg-role-teacher');
     var identifierLabel = document.getElementById('reg-identifier-label');
@@ -81,8 +80,8 @@
         roleStudentBtn.className = 'btn btn-outline-primary active';
         roleTeacherBtn.className = 'btn btn-outline-info';
         identifierLabel.innerHTML = '学号 <span class="text-danger">*</span>';
-        identifierHint.textContent = '教务已录入的学生学号';
-        identifierInput.placeholder = '请输入学号';
+        identifierHint.textContent = '教务已录入的学号，将作为登录用户名';
+        identifierInput.placeholder = '请输入学号（教务已录入）';
     });
 
     roleTeacherBtn.addEventListener('click', function() {
@@ -90,8 +89,8 @@
         roleStudentBtn.className = 'btn btn-outline-primary';
         roleTeacherBtn.className = 'btn btn-outline-info active';
         identifierLabel.innerHTML = '工号 <span class="text-danger">*</span>';
-        identifierHint.textContent = '教务已录入的教师工号';
-        identifierInput.placeholder = '请输入工号';
+        identifierHint.textContent = '教务已录入的工号，将作为登录用户名';
+        identifierInput.placeholder = '请输入工号（教务已录入）';
     });
 
     document.getElementById('register-form').addEventListener('submit', function(e) {
@@ -101,24 +100,23 @@
         errorEl.style.display = 'none';
         successEl.style.display = 'none';
 
-        var username = document.getElementById('reg-username').value.trim();
-        var password = document.getElementById('reg-password').value.trim();
         var name = document.getElementById('reg-name').value.trim();
         var identifier = document.getElementById('reg-identifier').value.trim();
+        var password = document.getElementById('reg-password').value.trim();
 
-        if (!username || username.length < 3) {
-            errorEl.textContent = '用户名至少3个字符'; errorEl.style.display = 'block'; return;
-        }
-        if (!password || password.length < 6) {
-            errorEl.textContent = '密码至少6位'; errorEl.style.display = 'block'; return;
-        }
-        if (!name) {
-            errorEl.textContent = '请输入真实姓名'; errorEl.style.display = 'block'; return;
-        }
         if (!identifier) {
             errorEl.textContent = currentRole === 'STUDENT' ? '请输入学号' : '请输入工号';
             errorEl.style.display = 'block'; return;
         }
+        if (!name) {
+            errorEl.textContent = '请输入真实姓名'; errorEl.style.display = 'block'; return;
+        }
+        if (!password || password.length < 6) {
+            errorEl.textContent = '密码至少6位'; errorEl.style.display = 'block'; return;
+        }
+
+        // 自动用学号/工号作为用户名
+        var username = identifier;
 
         var payload = {
             username: username,
@@ -130,76 +128,54 @@
 
         var submitBtn = document.getElementById('reg-submit-btn');
         submitBtn.disabled = true;
-        submitBtn.textContent = '注册中...';
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>注册中...';
 
-        // 调用注册 API
-        fetch(CourseQSortAPI.getBaseUrl() + '/auth/register/', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        })
-        .then(function(resp) {
-            return resp.json().then(function(data) {
-                return { ok: resp.ok, status: resp.status, data: data };
-            });
-        })
-        .then(function(result) {
+        CourseQSortAPI.auth.register(payload)
+        .then(function(data) {
             submitBtn.disabled = false;
             submitBtn.textContent = '注册';
 
-            if (result.ok) {
-                // 注册成功 → 保存 token → 跳转
-                var data = result.data;
-                CourseQSortAPI.token.set(data.access, data.refresh);
-                sessionStorage.setItem('userName', data.user.name || username);
-                sessionStorage.setItem('userRole', data.user.role || currentRole);
-                if (currentRole === 'TEACHER') {
-                    sessionStorage.setItem('teacherName', data.user.name);
-                    sessionStorage.setItem('teacherId', String(data.user.id));
-                } else {
-                    sessionStorage.setItem('studentName', data.user.name);
-                    sessionStorage.setItem('studentId', String(data.user.id));
-                }
-
-                successEl.textContent = (data.detail || '注册成功') + '，正在跳转...';
-                successEl.style.display = 'block';
-
-                setTimeout(function() {
-                    window.location.href = currentRole === 'TEACHER' ? 'teacher.html' : 'index.html';
-                }, 800);
+            var isMock = CourseQSortAPI.isMockMode();
+            if (isMock) {
+                // 预览模式：不调用 setTokens（假 token 会错误关闭 mock 模式）
+                sessionStorage.setItem('loginMode', 'mock');
             } else {
-                // 显示错误
-                var msg = '';
-                if (result.data) {
-                    // 提取 DRF 错误信息
-                    Object.keys(result.data).forEach(function(k) {
-                        var v = result.data[k];
-                        msg += (Array.isArray(v) ? v.join('；') : String(v)) + '\n';
-                    });
-                }
-                errorEl.textContent = msg || ('注册失败 (HTTP ' + result.status + ')');
-                errorEl.style.display = 'block';
+                CourseQSortAPI.token.set(data.access, data.refresh);
             }
+            sessionStorage.setItem('userName', data.user.name || username);
+            sessionStorage.setItem('userRole', data.user.role || currentRole);
+            if (currentRole === 'TEACHER') {
+                sessionStorage.setItem('teacherName', data.user.name);
+                sessionStorage.setItem('teacherId', String(data.user.teacher_id || data.user.id));
+                sessionStorage.setItem('teacherDept', data.user.teacher_dept || '');
+            } else {
+                sessionStorage.setItem('studentName', data.user.name);
+                sessionStorage.setItem('studentId', String(data.user.id));
+            }
+
+            successEl.textContent = (data.detail || '注册成功') + '，正在跳转...';
+            successEl.style.display = 'block';
+
+            setTimeout(function() {
+                window.location.href = currentRole === 'TEACHER' ? 'teacher.html' : 'student.html';
+            }, 800);
         })
         .catch(function(err) {
             submitBtn.disabled = false;
             submitBtn.textContent = '注册';
-            // Mock 模式回退
-            if (CourseQSortAPI.isMockMode()) {
-                // Mock: 模拟注册成功
-                sessionStorage.setItem('userName', name);
-                sessionStorage.setItem('userRole', currentRole);
-                if (currentRole === 'TEACHER') {
-                    sessionStorage.setItem('teacherName', name);
-                    sessionStorage.setItem('teacherId', '1');
-                } else {
-                    sessionStorage.setItem('studentName', name);
-                    sessionStorage.setItem('studentId', identifier);
-                }
-                window.location.href = currentRole === 'TEACHER' ? 'teacher.html' : 'index.html';
-                return;
+
+            if (err.status && err.data) {
+                var msg = '';
+                Object.keys(err.data).forEach(function(k) {
+                    var v = err.data[k];
+                    msg += (Array.isArray(v) ? v.join('；') : String(v)) + '\n';
+                });
+                errorEl.textContent = msg || ('注册失败 (HTTP ' + err.status + ')');
+            } else if (err.message) {
+                errorEl.textContent = err.message;
+            } else {
+                errorEl.textContent = '网络错误，无法连接后端服务器';
             }
-            errorEl.textContent = '网络错误，无法连接后端服务器';
             errorEl.style.display = 'block';
         });
     });

@@ -63,12 +63,16 @@
                     <div class="d-flex justify-content-between align-items-center mb-3">
                         <h4 class="mb-0">课程管理</h4>
                         <div>
-                            <button class="btn btn-success btn-sm me-2" id="course-import-btn">导入Excel</button>
+                            <button class="btn btn-success btn-sm me-1" id="course-import-btn"><i class="bi bi-file-earmark-arrow-up me-1"></i>导入JSON</button>
+                            <input type="file" id="json-import-input" accept=".json" style="display:none;">
+                            <button class="btn btn-outline-secondary btn-sm me-1" id="course-export-btn" title="导出JSON">导出</button>
+                            <button class="btn btn-outline-danger btn-sm me-1 d-none" id="course-batch-delete-btn">批量删除</button>
+                            <button class="btn btn-outline-danger btn-sm me-1" id="course-delete-all-btn">全部删除</button>
                             <button class="btn btn-primary btn-sm" id="course-add-btn">新增课程</button>
                         </div>
                     </div>
                     <input type="text" class="form-control form-control-sm mb-2" id="course-search" placeholder="搜索课程名称或编号..." style="max-width:300px;">
-                    <div class="table-responsive"><table class="table table-hover table-sm"><thead><tr><th>名称</th><th>编号</th><th>学分</th><th>教师</th><th>专业</th><th>容量</th><th>类别</th><th>操作</th></tr></thead><tbody id="admin-course-list"></tbody></table></div>
+                    <div class="table-responsive"><table class="table table-hover table-sm"><thead><tr><th><input type="checkbox" id="course-select-all" title="全选"></th><th>名称</th><th>编号</th><th>学分</th><th>教师</th><th>专业</th><th>容量</th><th>类别</th><th>操作</th></tr></thead><tbody id="admin-course-list"></tbody></table></div>
                     <div class="d-flex justify-content-between align-items-center mt-2">
                         <small class="text-muted" id="admin-course-pagination-info"></small>
                         <nav><ul class="pagination pagination-sm mb-0" id="admin-course-pagination"></ul></nav>
@@ -79,15 +83,27 @@
                 <div class="admin-section d-none" id="section-resources">
                     <div class="d-flex justify-content-between align-items-center mb-2">
                         <h4 class="mb-0">基础资源</h4>
-                        <button class="btn btn-primary btn-sm d-none" id="resource-add-btn">新增</button>
+                        <button class="btn btn-success btn-sm me-1" id="resource-import-btn"><i class="bi bi-file-earmark-arrow-up me-1"></i>导入</button>
+                            <input type="file" id="resource-import-input" accept=".json" style="display:none;">
+                            <button class="btn btn-outline-secondary btn-sm me-1" id="resource-export-btn"><i class="bi bi-download me-1"></i>导出</button>
+                            <button class="btn btn-primary btn-sm d-none" id="resource-add-btn">新增</button>
                     </div>
                     <ul class="nav nav-tabs mb-3" id="resource-tabs">
                         <li class="nav-item"><a class="nav-link active" data-resource="teachers" href="#">教师</a></li>
                         <li class="nav-item"><a class="nav-link" data-resource="students" href="#">学生</a></li>
                         <li class="nav-item"><a class="nav-link" data-resource="classrooms" href="#">教室</a></li>
                         <li class="nav-item"><a class="nav-link" data-resource="majors" href="#">专业</a></li>
+                        <li class="nav-item"><a class="nav-link" data-resource="classgroups" href="#">班级</a></li>
+                        <li class="nav-item"><a class="nav-link" data-resource="course-assignments" href="#">必修分配</a></li>
                     </ul>
+                    <div id="teacher-dept-filter" class="d-none mb-2"><div class="row g-2 align-items-center"><div class="col-auto"><label class="form-label small mb-0">筛选学院：</label></div><div class="col-auto"><select class="form-select form-select-sm" id="teacher-filter-dept"><option value="">全部学院</option></select></div><div class="col-auto"><small class="text-muted" id="teacher-filter-hint"></small></div></div></div>
+                    <div id="student-filter" class="d-none mb-2"><div class="row g-2 align-items-center"><div class="col-auto"><label class="form-label small mb-0">年级：</label></div><div class="col-auto"><select class="form-select form-select-sm" id="student-filter-grade"><option value="">全部年级</option></select></div><div class="col-auto"><label class="form-label small mb-0">专业：</label></div><div class="col-auto"><select class="form-select form-select-sm" id="student-filter-major"><option value="">全部专业</option></select></div><div class="col-auto"><label class="form-label small mb-0">班级：</label></div><div class="col-auto"><select class="form-select form-select-sm" id="student-filter-class"><option value="">全部班级</option></select></div><div class="col-auto"><small class="text-muted" id="student-filter-hint"></small></div></div></div>
+                    <div id="classgroup-major-filter" class="d-none mb-2"><div class="row g-2 align-items-center"><div class="col-auto"><label class="form-label small mb-0">年级：</label></div><div class="col-auto"><select class="form-select form-select-sm" id="classgroup-filter-grade"><option value="">全部年级</option></select></div><div class="col-auto"><label class="form-label small mb-0">专业：</label></div><div class="col-auto"><select class="form-select form-select-sm" id="classgroup-filter-major"></select></div><div class="col-auto"><small class="text-muted" id="classgroup-filter-hint"></small></div></div></div>
                     <div id="resource-content"><div class="table-responsive"><table class="table table-sm"><tbody id="resource-table-body"></tbody></table></div></div>
+                    <div class="d-flex justify-content-between align-items-center mt-2" id="resource-pagination-bar">
+                        <small class="text-muted" id="resource-pagination-info"></small>
+                        <nav><ul class="pagination pagination-sm mb-0" id="resource-pagination"></ul></nav>
+                    </div>
                 </div>
 
                 <!-- 辅修时段 -->
@@ -111,7 +127,16 @@
                             <button class="btn btn-warning btn-sm" id="schedule-generate-btn">生成新方案</button>
                         </div>
                     </div>
-                    <div id="schedule-task-status" class="alert d-none"></div>
+                    <div id="schedule-task-status" class="alert d-none" style="display:none;">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <strong id="schedule-task-text">正在生成排课方案...</strong>
+                            <small class="text-muted" id="schedule-task-timer"></small>
+                        </div>
+                        <div class="progress" style="height:20px;">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" id="schedule-progress-bar" role="progressbar" style="width:0%">0%</div>
+                        </div>
+                        <small class="text-muted mt-1 d-block" id="schedule-task-detail"></small>
+                    </div>
                     <div class="table-responsive"><table class="table table-hover table-sm"><thead><tr><th>方案名称</th><th>学期</th><th>状态</th><th>评分</th><th>创建时间</th><th>操作</th></tr></thead><tbody id="schedule-plans-list"></tbody></table></div>
                 </div>
 
@@ -119,10 +144,27 @@
                 <div class="admin-section d-none" id="section-conflict">
                     <div class="d-flex justify-content-between align-items-center mb-3">
                         <h4 class="mb-0">冲突预分析</h4>
-                        <button class="btn btn-danger btn-sm" id="conflict-run-btn">运行分析</button>
+                        <div class="d-flex align-items-center gap-2">
+                            <label class="form-label small mb-0" title="只显示同时受影响学生数 ≥ 此值的冲突课程对，数值越小结果越多">ⓘ 最低冲突人数：</label>
+                            <select class="form-select form-select-sm" id="conflict-threshold" style="width:80px;">
+                                <option value="1">1</option><option value="5">5</option><option value="10" selected>10</option>
+                                <option value="20">20</option><option value="30">30</option><option value="50">50</option>
+                            </select>
+                            <button class="btn btn-danger btn-sm" id="conflict-run-btn"><i class="bi bi-exclamation-triangle"></i> 运行分析</button>
+                        </div>
+                        <small class="text-muted d-block mt-1">两门课上课时间重叠时，会同时影响选了这两门课的学生。阈值越低结果越多（最少 1 人即报告），越高只看影响面大的冲突。</small>
                     </div>
-                    <div id="conflict-task-status" class="alert d-none"></div>
-                    <div class="table-responsive"><table class="table table-sm"><thead><tr><th>批次数</th><th>学期</th><th>课程数</th><th>冲突对数</th><th>阈值</th><th>时间</th><th>操作</th></tr></thead><tbody id="conflict-results-list"></tbody></table></div>
+                    <div id="conflict-task-status" class="alert d-none" style="display:none;">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <strong id="conflict-task-text">正在分析课程冲突...</strong>
+                            <small class="text-muted" id="conflict-task-timer"></small>
+                        </div>
+                        <div class="progress" style="height:20px;">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" id="conflict-progress-bar" role="progressbar" style="width:0%">0%</div>
+                        </div>
+                        <small class="text-muted mt-1 d-block" id="conflict-task-detail"></small>
+                    </div>
+                    <div class="table-responsive"><table class="table table-sm"><thead><tr><th>批次</th><th>学期</th><th>课程数</th><th>冲突对数</th><th>阈值</th><th>时间</th><th>操作</th></tr></thead><tbody id="conflict-results-list"></tbody></table></div>
                     <div id="conflict-chart-area" class="mt-3"></div>
                 </div>
 
@@ -204,6 +246,35 @@
         </div>
     </div></div></div>
 
+    <!-- 必修分配弹窗 -->
+    <div class="modal fade" id="course-assign-modal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header bg-warning-subtle"><h5 class="modal-title" id="course-assign-modal-title">分配必修课</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body" id="course-assign-modal-body"></div>
+        <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button><button type="button" class="btn btn-warning" id="course-assign-modal-save"><i class="bi bi-check-lg me-1"></i>确定分配</button></div>
+    </div></div></div>
+
+    <!-- 全部删除确认弹窗 -->
+    <div class="modal fade" id="delete-all-modal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header bg-danger-subtle"><h5 class="modal-title"><i class="bi bi-exclamation-triangle-fill text-danger me-2"></i>删除全部课程</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+            <div class="alert alert-danger"><strong>警告：</strong>此操作将删除<strong>所有</strong>课程数据，不可恢复！</div>
+            <div class="mb-2"><label class="form-label">请输入教务密码以确认：</label><input type="password" class="form-control" id="delete-all-password" placeholder="教务密码"></div>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button><button type="button" class="btn btn-danger" id="delete-all-confirm-btn">确认全部删除</button></div>
+    </div></div></div>
+
+    <!-- 班级编辑弹窗 -->
+    <div class="modal fade" id="classgroup-edit-modal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title" id="classgroup-edit-modal-title">编辑班级</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+            <input type="hidden" id="classgroup-edit-id">
+            <div class="mb-2"><label class="form-label small">班级名称 <span class="text-danger">*</span></label><input type="text" class="form-control form-control-sm" id="classgroup-edit-name" placeholder="如 计科2401"></div>
+            <div class="mb-2"><label class="form-label small">年级</label><select class="form-select form-select-sm" id="classgroup-edit-grade"></select></div>
+            <div class="mb-2"><label class="form-label small">专业</label><select class="form-select form-select-sm" id="classgroup-edit-major"></select></div>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button><button type="button" class="btn btn-primary" id="classgroup-edit-modal-save">保存</button></div>
+    </div></div></div>
+
     <!-- 学生信息编辑弹窗 -->
     <div class="modal fade" id="student-edit-modal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
         <div class="modal-header"><h5 class="modal-title" id="student-edit-modal-title">编辑学生信息</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
@@ -212,12 +283,38 @@
             <div class="mb-2"><label class="form-label small">姓名 <span class="text-danger">*</span></label><input type="text" class="form-control form-control-sm" id="student-edit-name" placeholder="真实姓名" required></div>
             <div class="mb-2"><label class="form-label small">学号 <span class="text-danger">*</span></label><input type="text" class="form-control form-control-sm" id="student-edit-no" placeholder="如 2024001" required></div>
             <div class="mb-2"><label class="form-label small">专业</label><select class="form-select form-select-sm" id="student-edit-major"></select></div>
-            <div class="mb-2"><label class="form-label small">年级</label><input type="text" class="form-control form-control-sm" id="student-edit-grade" placeholder="如 2024"></div>
+            <div class="mb-2"><label class="form-label small">年级</label><select class="form-select form-select-sm" id="student-edit-grade"></select></div>
             <div class="mb-2"><label class="form-label small">班级</label><input type="text" class="form-control form-control-sm" id="student-edit-class" placeholder="如 计科2401"></div>
         </div>
         <div class="modal-footer">
             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
             <button type="button" class="btn btn-primary" id="student-edit-modal-save">保存</button>
+        </div>
+    </div></div></div>
+
+    <!-- JSON 导入弹窗 -->
+    <div class="modal fade" id="json-import-modal" tabindex="-1"><div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title"><i class="bi bi-file-earmark-arrow-up me-2"></i>导入课程 JSON</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body">
+            <div id="import-drop-zone">
+                <div class="drop-icon"><i class="bi bi-cloud-upload"></i></div>
+                <p class="mb-1 fw-semibold">拖放 JSON 文件到此处</p>
+                <p class="text-muted small mb-2">或点击选择文件（仅支持 .json）</p>
+                <p class="text-success small fw-semibold" id="import-file-name"></p>
+                <input type="file" id="json-import-input" accept=".json" style="display:none;">
+            </div>
+            <div class="mt-3">
+                <label class="form-label small fw-semibold"><i class="bi bi-link-45deg me-1"></i>导入课程的默认连排节数 <small class="text-muted fw-normal">（每次课连续上几节）</small></label>
+                <input type="number" class="form-control form-control-sm" id="import-session-length" value="2" min="1" max="6" style="max-width:100px;">
+                <small class="text-muted">例如大学英语通常为 2（两节连排），实验课可能为 3</small>
+            </div>
+            <div id="import-status" class="alert d-none mt-3 mb-0"></div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+            <button type="button" class="btn btn-primary" id="import-start-btn" disabled>
+                <i class="bi bi-check-lg me-1"></i>开始导入
+            </button>
         </div>
     </div></div></div>
 

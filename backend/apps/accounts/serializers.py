@@ -14,15 +14,40 @@ class UserSerializer(serializers.Serializer):
 class LoginSerializer(serializers.Serializer):
     username = serializers.CharField()
     password = serializers.CharField(write_only=True)
+    role = serializers.CharField(required=False, allow_blank=True, default="")
 
     def validate(self, attrs):
         user = authenticate(username=attrs.get("username"), password=attrs.get("password"))
         if not user:
-            raise serializers.ValidationError("No active account found with the given credentials")
+            raise serializers.ValidationError("账号或密码错误")
+        profile = getattr(user, "profile", None)
+        role = (attrs.get("role", "") or "").upper()
+
+        # 如果传了角色参数，校验是否匹配
+        if role and profile:
+            if profile.role.upper() != role:
+                raise serializers.ValidationError("该角色下不存在此账号")
+
         from rest_framework_simplejwt.tokens import RefreshToken
 
         refresh = RefreshToken.for_user(user)
-        profile = getattr(user, "profile", None)
+
+        # 教师/学生附加 id
+        teacher_id = None
+        student_id = None
+        if profile and profile.role == "TEACHER":
+            from apps.courses.models import Teacher
+
+            teacher = Teacher.objects.filter(user=user).first()
+            if teacher:
+                teacher_id = teacher.id
+        elif profile and profile.role == "STUDENT":
+            from apps.courses.models import Student
+
+            student = Student.objects.filter(user=user).first()
+            if student:
+                student_id = student.id
+
         return {
             "access": str(refresh.access_token),
             "refresh": str(refresh),
@@ -33,6 +58,8 @@ class LoginSerializer(serializers.Serializer):
                 "name": profile.name if profile else user.username,
                 "email": user.email,
                 "major": profile.major if profile else None,
+                "teacher_id": teacher_id,
+                "student_id": student_id,
             },
         }
 

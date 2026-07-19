@@ -2,58 +2,91 @@
    CourseQSort 选课系统 — 样式
    ======================================== */
 
-/* 表格样式 */
+/* ---- 基础 ---- */
 .table th, .table td { vertical-align: middle; }
 .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.875rem; }
 
-/* 冲突行样式 */
-tr.conflict-row { opacity: 0.6; }
+/* ---- 过渡动画 ---- */
+.btn, .badge, .nav-link, .card, .free-slot-btn {
+    transition: all 0.2s ease-in-out;
+}
+.card:hover { box-shadow: 0 4px 18px rgba(0,0,0,0.1); }
+.table-hover tbody tr { transition: background-color 0.15s ease; }
+
+/* ---- 冲突行 ---- */
+tr.conflict-row { opacity: 0.65; }
 tr.conflict-row td { background-color: #f8d7da !important; }
-.conflict-badge { cursor: pointer; }
+.conflict-badge { cursor: pointer; position: relative; }
+.conflict-badge:hover { transform: scale(1.08); }
 
-/* 空闲时段按钮 */
-.free-slot-btn {
-    display: block;
-    width: 100%;
-    text-align: left;
-    margin-bottom: 2px;
-}
-.free-slot-btn.active-slot {
-    background-color: #0d6efd;
-    color: #fff;
-    border-color: #0d6efd;
+/* ---- 学分徽章（头部） ---- */
+#total-credits {
+    font-size: 13px;
     font-weight: 600;
-    box-shadow: 0 0 0 0.2rem rgba(13,110,253,0.25);
+    padding: 5px 10px;
+    letter-spacing: 0.3px;
+}
+#total-credits.text-warning-bg { background: #fff3cd; color: #856404; }
+
+/* ---- 课程分类标签 ---- */
+.course-category-tag {
+    display: inline-block;
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    margin-left: 4px;
+    font-weight: 500;
+    vertical-align: middle;
+}
+.cat-professional { background: #cfe2ff; color: #0a58ca; }   /* 专业课 */
+.cat-elective { background: #e8daef; color: #6f42c1; }        /* 选修 */
+.cat-general { background: #d1e7dd; color: #0f5132; }         /* 通识 */
+.cat-pe { background: #f8d7da; color: #842029; }              /* 体育 */
+.cat-required { background: #fff3cd; color: #856404; }        /* 专必 */
+
+/* ---- 必修徽章 ---- */
+.badge-mandatory {
+    font-size: 11px;
+    padding: 3px 7px;
+    border-radius: 10px;
+    font-weight: 600;
+}
+.badge-mandatory i { font-size: 10px; }
+
+/* ---- 空闲时段按钮 ---- */
+.free-slot-btn {
+    display: block; width: 100%; text-align: left;
+    margin-bottom: 2px;
+    font-size: 13px;
+    border: 1px solid #dee2e6;
+}
+.free-slot-btn:hover { border-color: #0d6efd; background: #f0f6ff; }
+.free-slot-btn.active-slot {
+    background: linear-gradient(135deg, #0d6efd, #0b5ed7);
+    color: #fff;
+    border-color: #0a58ca;
+    font-weight: 600;
+    box-shadow: 0 0 0 0.25rem rgba(13,110,253,0.2);
+    transform: scale(1.02);
 }
 
-/* 浮动冲突弹窗 */
+/* ---- 浮动冲突弹窗 ---- */
 .conflict-popover-content {
-    background: white;
+    background: #fff;
     border: 1px solid #dc3545;
-    padding: 10px;
-    border-radius: 5px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+    border-radius: 8px;
+    padding: 12px;
+    box-shadow: 0 4px 16px rgba(220,53,69,0.2);
     max-width: 320px;
     font-size: 13px;
 }
-.conflict-popover-content ul {
-    list-style: none;
-    padding-left: 0;
-    margin-bottom: 0;
-}
-.conflict-popover-content li {
-    border-bottom: 1px solid #f0f0f0;
-    padding: 4px 0;
-}
+.conflict-popover-content ul { list-style: none; padding-left: 0; margin-bottom: 0; }
+.conflict-popover-content li { border-bottom: 1px solid #f0f0f0; padding: 5px 0; }
 .conflict-popover-content li:last-child { border-bottom: none; }
 
-/* 加载动画遮罩 */
+/* ---- 加载动画 ---- */
 .loading-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
     background: rgba(255,255,255,0.85);
     z-index: 9999;
     display: none;
@@ -62,38 +95,89 @@ tr.conflict-row td { background-color: #f8d7da !important; }
     align-items: center;
 }
 
-/* 分页按钮 */
-#prev-page-btn:disabled, #next-page-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-}
+/* ---- 分页 ---- */
+#prev-page-btn:disabled, #next-page-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* 数据源标识 */
-#data-source-badge {
-    font-size: 11px;
-    padding: 3px 8px;
-}
+/* ---- 数据源标识 ---- */
+#data-source-badge { font-size: 11px; padding: 3px 8px; }
 
-/* 导航栏用户信息 */
+/* ---- 导航 ---- */
 .navbar-text { font-size: 14px; }
 
-/* 选课操作按钮 */
-.select-btn { min-width: 60px; }
+/* ---- 学生端按钮 ---- */
+.select-btn { min-width: 60px; font-weight: 500; }
+.select-btn:hover { transform: translateY(-1px); box-shadow: 0 2px 6px rgba(13,110,253,0.3); }
+.drop-btn { line-height: 1; font-size: 12px; border-radius: 50%; width: 22px; height: 22px; padding: 0; }
 
-/* 退课按钮 */
-.drop-btn {
-    line-height: 1;
-    font-size: 12px;
-}
-
-/* 已选课程列表滚动 */
-#selected-list { max-height: 300px; overflow-y: auto; }
+/* ---- 已选课程列表 ---- */
+#selected-list { max-height: 320px; overflow-y: auto; }
 #selected-list ul { margin-bottom: 0; }
+#selected-list .list-group-item {
+    border-left: 3px solid transparent;
+    transition: all 0.15s;
+}
+#selected-list .list-group-item:hover { background: #f8f9fa; }
+#selected-list .list-group-item.mandatory-item { border-left-color: #ffc107; background: #fffdf5; }
+#selected-list .list-group-item .credit-badge { font-size: 11px; padding: 2px 6px; }
 
-/* 空闲时段区域滚动 */
+/* ---- 空闲时段 ---- */
 #free-slots-list { max-height: 350px; overflow-y: auto; }
 
-/* 响应式调整 */
+/* ---- 管理端侧边栏 ---- */
+#admin-sidebar .nav-link {
+    border-radius: 6px;
+    margin: 2px 4px;
+    padding: 8px 12px;
+    font-size: 14px;
+}
+#admin-sidebar .nav-link:hover { background: rgba(255,255,255,0.1); }
+#admin-sidebar .nav-link.active {
+    background: rgba(255,255,255,0.2);
+    font-weight: 600;
+    border-left: 3px solid #0d6efd;
+}
+
+/* ---- 管理端课程表格按钮组 ---- */
+.admin-action-btns { display: flex; gap: 4px; flex-wrap: wrap; }
+.admin-action-btns .btn {
+    font-size: 12px;
+    padding: 2px 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+/* ---- 分配弹窗 ---- */
+#course-assign-modal .modal-header { border-bottom: 2px solid #ffc107; }
+#course-assign-modal .target-preview {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 12px;
+    margin-top: 8px;
+    font-size: 13px;
+}
+#course-assign-modal .target-preview .badge {
+    font-size: 12px;
+    padding: 4px 10px;
+}
+
+/* ---- 管理端仪表板卡片 ---- */
+#dashboard-cards .card {
+    border-radius: 10px;
+    border: none;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+#dashboard-cards .card:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,0.12); }
+#dashboard-cards .card .display-6 { font-weight: 700; }
+#dashboard-cards .stat-icon {
+    font-size: 2.2rem;
+    opacity: 0.7;
+    position: absolute;
+    top: 10px;
+    right: 15px;
+}
+
+/* ---- 响应式 ---- */
 @media (max-width: 768px) {
     .col-md-9 { order: 2; }
     .col-md-3 { order: 1; }
@@ -103,3 +187,92 @@ tr.conflict-row td { background-color: #f8d7da !important; }
 
 /* 课程名过长换行 */
 #course-list td:first-child { max-width: 150px; white-space: normal; word-break: break-all; }
+
+/* ---- 算法参数滑块 ---- */
+.form-range {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 8px;
+    border-radius: 4px;
+    outline: none;
+    margin: 0;
+    padding: 0;
+    background: linear-gradient(to right, #0d6efd 0%, #0d6efd var(--fill, 50%), #dee2e6 var(--fill, 50%), #dee2e6 100%);
+}
+.form-range::-webkit-slider-runnable-track {
+    height: 8px;
+    border-radius: 4px;
+    background: transparent;
+}
+.form-range::-moz-range-track {
+    height: 8px;
+    border-radius: 4px;
+    background: transparent;
+}
+.form-range::-moz-range-progress {
+    height: 8px;
+    border-radius: 4px 0 0 4px;
+    background: #0d6efd;
+}
+.form-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #0d6efd;
+    border: 2px solid #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,.25);
+    cursor: pointer;
+    margin-top: -6px;
+    transition: transform .15s, box-shadow .15s;
+}
+.form-range::-webkit-slider-thumb:hover {
+    transform: scale(1.15);
+    box-shadow: 0 2px 8px rgba(13,110,253,.35);
+}
+.form-range::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #0d6efd;
+    border: 2px solid #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,.25);
+    cursor: pointer;
+}
+.form-range:focus::-webkit-slider-thumb {
+    box-shadow: 0 0 0 0.25rem rgba(13,110,253,.25);
+}
+.form-range:focus::-moz-range-thumb {
+    box-shadow: 0 0 0 0.25rem rgba(13,110,253,.25);
+}
+
+/* ---- JSON 导入弹窗拖放区 ---- */
+#import-drop-zone {
+    border: 2px dashed #adb5bd;
+    border-radius: 10px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all .2s;
+    background: #f8f9fa;
+}
+#import-drop-zone:hover,
+#import-drop-zone.drag-over {
+    border-color: #0d6efd;
+    background: #e7f1ff;
+}
+#import-drop-zone .drop-icon {
+    font-size: 3rem;
+    color: #6c757d;
+    margin-bottom: 8px;
+}
+#import-drop-zone.drag-over .drop-icon {
+    color: #0d6efd;
+}
+#import-file-name {
+    font-size: 13px;
+    color: #198754;
+    display: none;
+}

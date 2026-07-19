@@ -1,9 +1,10 @@
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
 
 from django.contrib.auth.models import User
+from django.db import close_old_connections
 from django.test import TestCase, TransactionTestCase
 from rest_framework.test import APIClient
 
@@ -91,18 +92,8 @@ class RecommendationTests(StudentTestMixin, TestCase):
         all_results = recommend_courses(2, 2, major_id=major.id)
         category = all_results[0]["category"]
 
-        filtered_results = recommend_courses(
-            2,
-            2,
-            major_id=major.id,
-            category=category,
-        )
-        non_matching_results = recommend_courses(
-            2,
-            2,
-            major_id=major.id,
-            category="not-a-real-category",
-        )
+        filtered_results = recommend_courses(2, 2, major_id=major.id, category=category)
+        non_matching_results = recommend_courses(2, 2, major_id=major.id, category="not-a-real-category")
 
         self.assertEqual(len(filtered_results), 1)
         self.assertEqual(filtered_results[0]["course_id"], course.id)
@@ -197,6 +188,99 @@ class StudentCourseApiTests(StudentTestMixin, TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("results", response.data)
+
+
+class StudentCourseConcurrencyTests(StudentTestMixin, TransactionTestCase):
+    def setUp(self):
+        self.teacher = Teacher.objects.create(name="Concurrency Teacher", employee_no="T100")
+        self.room = Classroom.objects.create(name="Room 301", capacity=60)
+
+        self.course = self.create_course("Concurrency Course", expected_student_count=1)
+        CourseScheduleItem.objects.create(
+            course=self.course,
+            teacher=self.teacher,
+            classroom=self.room,
+            day_of_week=2,
+            period=3,
+        )
+
+        self.user_a = User.objects.create_user(username="student-a", password="secret123")
+        Profile.objects.create(user=self.user_a, role="STUDENT", name="Student A")
+        self.user_b = User.objects.create_user(username="student-b", password="secret123")
+        Profile.objects.create(user=self.user_b, role="STUDENT", name="Student B")
+
+    def _post_select(self, user, barrier, results, index):
+        close_old_connections()
+        client = APIClient()
+        client.force_authenticate(user)
+        barrier.wait()
+        response = client.post(f"/api/v1/student/courses/{self.course.id}/select/")
+        results[index] = (response.status_code, response.data["status"])
+        close_old_connections()
+
+    def test_concurrent_selection_does_not_exceed_course_capacity(self):
+        barrier = threading.Barrier(2)
+        results = [None, None]
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(self._post_select, self.user_a, barrier, results, 0),
+                executor.submit(self._post_select, self.user_b, barrier, results, 1),
+            ]
+            for future in futures:
+                future.result()
+
+        self.assertEqual(Enrollment.objects.filter(course=self.course).count(), 1)
+        self.assertCountEqual([code for code, _ in results], [201, 409])
+        self.assertIn("SELECTED", [status for _, status in results])
+        self.assertIn("FULL", [status for _, status in results])
+
+    def test_concurrent_duplicate_selection_keeps_single_enrollment(self):
+        barrier = threading.Barrier(2)
+        results = [None, None]
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [
+                executor.submit(self._post_select, self.user_a, barrier, results, 0),
+                executor.submit(self._post_select, self.user_a, barrier, results, 1),
+            ]
+            for future in futures:
+                future.result()
+
+        self.assertEqual(Enrollment.objects.filter(course=self.course, user=self.user_a).count(), 1)
+        self.assertCountEqual([code for code, _ in results], [201, 409])
+        self.assertIn("SELECTED", [status for _, status in results])
+        self.assertIn("ALREADY_SELECTED", [status for _, status in results])
+
+
+class StudentCoursePerformanceTests(StudentTestMixin, TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(username="student-performance", password="secret123")
+        Profile.objects.create(user=self.user, role="STUDENT", name="Student Performance")
+        self.client.force_authenticate(self.user)
+
+        self.teacher = Teacher.objects.create(name="Performance Teacher", employee_no="T200")
+        self.room = Classroom.objects.create(name="Room 401", capacity=80)
+
+        for index in range(40):
+            course = self.create_course(f"Performance Course {index:02d}")
+            CourseScheduleItem.objects.create(
+                course=course,
+                teacher=self.teacher,
+                classroom=self.room,
+                day_of_week=(index % 5) + 1,
+                period=((index * 2) % 11) + 1,
+            )
+
+    def test_course_list_performance_smoke(self):
+        started_at = time.perf_counter()
+        response = self.client.get("/api/v1/student/courses/")
+        duration = time.perf_counter() - started_at
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 40)
+        self.assertLess(duration, 5.0)
 
 
 class AdminCourseApiTests(StudentTestMixin, TestCase):

@@ -1,18 +1,3 @@
-/**
- * ========================================
- * CourseQSort API Client
- * 排课规划器 — 前端 API 对接层
- * 后端: Django REST Framework + SimpleJWT
- * Base URL: /api/v1/
- * ========================================
- *
- * 双模式设计:
- *   MOCK 模式 (默认) — 使用内置模拟数据，前端可独立预览
- *   API 模式 — 对接真实 Django 后端，需后端服务运行
- *
- * 切换方式: SetMockMode(false) 或在控制台执行
- *   CourseQSortAPI.setMockMode(false)
- */
 
 var CourseQSortAPI = (function () {
     'use strict';
@@ -42,7 +27,12 @@ var CourseQSortAPI = (function () {
     };
 
     // 页面加载时从 localStorage 恢复 JWT 模式（防止页面跳转后 CONFIG 复位导致误判未登录）
-    if (localStorage.getItem(TOKEN_KEYS.ACCESS)) {
+    // 优先读取 sessionStorage 中用户手动选择的登录模式
+    var savedMode = sessionStorage.getItem('loginMode');
+    if (savedMode) {
+        CONFIG.LOGIN_MODE = savedMode;
+        CONFIG.USE_MOCK = (savedMode !== 'jwt');
+    } else if (localStorage.getItem(TOKEN_KEYS.ACCESS)) {
         CONFIG.LOGIN_MODE = 'jwt';
         CONFIG.USE_MOCK = false;
     }
@@ -55,6 +45,8 @@ var CourseQSortAPI = (function () {
         if (access) localStorage.setItem(TOKEN_KEYS.ACCESS, access);
         if (refresh) localStorage.setItem(TOKEN_KEYS.REFRESH, refresh);
         CONFIG.LOGIN_MODE = 'jwt';
+        CONFIG.USE_MOCK = false;
+        sessionStorage.setItem('loginMode', 'jwt');
     }
 
     function clearTokens() {
@@ -73,7 +65,11 @@ var CourseQSortAPI = (function () {
     }
 
     function getLoginMode() { return CONFIG.LOGIN_MODE; }
-    function setLoginMode(mode) { CONFIG.LOGIN_MODE = mode; }
+    function setLoginMode(mode) {
+        CONFIG.LOGIN_MODE = mode;
+        CONFIG.USE_MOCK = (mode !== 'jwt');
+        sessionStorage.setItem('loginMode', mode);
+    }
 
     // ======================== 核心 HTTP 请求 ========================
 
@@ -87,7 +83,8 @@ var CourseQSortAPI = (function () {
 
         var url = CONFIG.BASE_URL + path;
         console.log('[API] fetch ' + method + ' ' + url);
-        var headers = { 'Content-Type': 'application/json' };
+        var isFormData = opts.isFormData || (body instanceof FormData);
+        var headers = isFormData ? {} : { 'Content-Type': 'application/json' };
 
         var token = getAccessToken();
         if (token) headers['Authorization'] = 'Bearer ' + token;
@@ -97,7 +94,7 @@ var CourseQSortAPI = (function () {
             headers: headers,
         };
         if (body && method !== 'GET') {
-            fetchOpts.body = JSON.stringify(body);
+            fetchOpts.body = isFormData ? body : JSON.stringify(body);
         }
 
         try {
@@ -112,7 +109,7 @@ var CourseQSortAPI = (function () {
                 } else {
                     clearTokens();
                     CONFIG.LOGIN_MODE = 'mock';
-                    window.location.href = 'login.html';
+                    window.location.href = 'index.html';
                     throw new Error('Session expired');
                 }
             }
@@ -130,7 +127,7 @@ var CourseQSortAPI = (function () {
             return await resp.json();
 
         } catch (err) {
-            console.error('[API] catch error: name=' + err.name + ' message=' + err.message + ' status=' + err.status);
+            console.error('[API] catch error: name=' + err.name + ' message=' + err.message + ' status=' + err.status + ' data=' + JSON.stringify(err.data));
             if (err.name === 'TypeError' && err.message.includes('fetch')) {
                 // 只有 mock 模式才静默回退，后端模式抛出错误让调用方处理
                 if (CONFIG.USE_MOCK) {
@@ -198,7 +195,10 @@ var CourseQSortAPI = (function () {
 
         for (var mk in mockCallbacks) {
             if (mk.indexOf(':pattern:') === -1) continue;
-            var pattern = mk.split(':pattern:')[1];
+            var parts = mk.split(':pattern:');
+            var patternMethod = parts[0];
+            var pattern = parts[1];
+            if (patternMethod !== method) continue;
             if (matchPath(pathOnly, pattern)) {
                 var matchedId = extractId(pathOnly, pattern);
                 return Promise.resolve(mockCallbacks[mk](handlerArg, matchedId));
@@ -335,25 +335,28 @@ var CourseQSortAPI = (function () {
         var name = body.name || '';
         var identifier = body.identifier || '';
         var role = body.role || 'STUDENT';
+        var teacherId = null, teacherDept = null;
         if (role === 'STUDENT') {
             // 检查 mock 学生数据中是否有匹配的姓名+学号
             // 简单模拟：直接通过
         } else if (role === 'TEACHER') {
             // 检查 mock 教师数据
-            var found = MOCK_TEACHERS.some(function(t) {
+            var foundTeacher = MOCK_TEACHERS.find(function(t) {
                 return t.name === name && t.employee_no === identifier;
             });
-            if (!found) {
+            if (!foundTeacher) {
                 var err = new Error('未找到匹配的教师记录');
                 err.status = 400;
                 err.data = { identifier: ['未找到姓名为「' + name + '」且工号为「' + identifier + '」的教师记录'] };
                 throw err;
             }
+            teacherId = foundTeacher.id;
+            teacherDept = foundTeacher.department || '';
         }
         return {
             access: 'mock_access_' + Date.now(),
             refresh: 'mock_refresh_' + Date.now(),
-            user: { id: Date.now() % 10000, username: body.username, role: role, name: name },
+            user: { id: teacherId || (Date.now() % 10000), username: body.username, role: role, name: name, teacher_id: teacherId, teacher_dept: teacherDept },
             detail: '注册成功'
         };
     });
@@ -377,16 +380,30 @@ var CourseQSortAPI = (function () {
         };
         var user = VALID_USERS[username];
         if (!user) {
-            var err = new Error('账号不存在');
+            var err = new Error('账号或密码错误');
             err.status = 401;
-            err.data = { detail: '账号不存在' };
+            err.data = { detail: '账号或密码错误' };
             throw err;
         }
         if (user.password !== password) {
-            var err = new Error('密码错误');
+            var err = new Error('账号或密码错误');
             err.status = 401;
-            err.data = { detail: '密码错误' };
+            err.data = { detail: '账号或密码错误' };
             throw err;
+        }
+        // 校验角色是否匹配
+        var reqRole = (body.role || '').toUpperCase();
+        if (reqRole && user.role !== reqRole) {
+            var err = new Error('该角色下不存在此账号');
+            err.status = 401;
+            err.data = { detail: '该角色下不存在此账号' };
+            throw err;
+        }
+        // 查找教师/学生 id
+        var teacherId = null, studentId = null, teacherDept = null;
+        if (user.role === 'TEACHER') {
+            var t = MOCK_TEACHERS.find(function(t){return t.name === user.name;});
+            if (t) { teacherId = t.id; teacherDept = t.department || ''; }
         }
         return {
             access: 'mock_access_token_' + Date.now(),
@@ -397,7 +414,10 @@ var CourseQSortAPI = (function () {
                 role: user.role,
                 name: user.name,
                 email: 'test@university.edu.cn',
-                major: '计算机科学与技术'
+                major: '计算机科学与技术',
+                teacher_id: teacherId,
+                teacher_dept: teacherDept,
+                student_id: studentId
             }
         };
     });
@@ -430,11 +450,18 @@ var CourseQSortAPI = (function () {
             student_id: 2024001, semester: '2026-spring',
             bitmap: '0x' + bitmap.join(''),
             courses: mockSelected.map(function (sc) {
+                var segments = sc.segments || [{
+                    week_start: 1, week_end: 18,
+                    time_slots: sc.time_slots,
+                    classroom: sc.classroom || 'A101',
+                    teacher: sc.teacher || ''
+                }];
                 return {
                     course_id: sc.course_id, name: sc.name,
                     credit: sc.credit,
                     teacher: sc.teacher, time_slots: sc.time_slots,
-                    classroom: 'A101', mandatory: sc.mandatory || false
+                    classroom: sc.classroom || 'A101', mandatory: sc.mandatory || false,
+                    segments: segments
                 };
             })
         };
@@ -468,6 +495,13 @@ var CourseQSortAPI = (function () {
                     }
                 }
             }
+            // 从 time_slots 生成默认 segments（全部 1-18 周）
+            var segs = [{
+                week_start: 1, week_end: 18,
+                time_slots: c.time_slots || [],
+                classroom: '',
+                teacher: c.teacher || ''
+            }];
             return {
                 course_id: c.course_id,
                 name: c.name,
@@ -480,7 +514,10 @@ var CourseQSortAPI = (function () {
                 conflict: conflict,
                 conflict_with: conflictWith,
                 category: c.category,
-                is_professional: c.is_professional
+                is_professional: c.is_professional,
+                mandatory: MOCK_MANDATORY_IDS.indexOf(c.course_id) !== -1,
+                classroom: '',
+                segments: segs
             };
         });
 
@@ -638,6 +675,14 @@ var CourseQSortAPI = (function () {
         { id: 5, name: "英语", code: "EN", student_count: 70 },
     ];
 
+    var MOCK_CLASS_GROUPS = [
+        { id: 1, name: "计科2401", major: 1, major_name: "计算机科学与技术", grade: "2024" },
+        { id: 2, name: "计科2402", major: 1, major_name: "计算机科学与技术", grade: "2024" },
+        { id: 3, name: "软工2401", major: 2, major_name: "软件工程", grade: "2024" },
+        { id: 4, name: "人工2301", major: 3, major_name: "人工智能", grade: "2023" },
+        { id: 5, name: "计科2301", major: 1, major_name: "计算机科学与技术", grade: "2023" },
+    ];
+
     var MOCK_STUDENTS = [
         { id: 1, student_no: "2024001", name: "张三", major: 1, major_name: "计算机科学与技术", grade: "2024", class_identification: "计科2401" },
         { id: 2, student_no: "2024002", name: "李四", major: 1, major_name: "计算机科学与技术", grade: "2024", class_identification: "计科2401" },
@@ -657,6 +702,8 @@ var CourseQSortAPI = (function () {
     ];
 
     var MOCK_CONFLICT_RESULTS = [
+        { id: 3, semester: "2026-spring", course_count: 50, conflict_pairs_count: 8, threshold: 30, created_at: "2026-07-19T16:30:00Z" },
+        { id: 2, semester: "2026-spring", course_count: 50, conflict_pairs_count: 12, threshold: 20, created_at: "2026-06-15T10:00:00Z" },
         { id: 1, semester: "2026-spring", course_count: 50, conflict_pairs_count: 15, threshold: 30, created_at: "2026-05-21T14:00:00Z" },
     ];
 
@@ -665,6 +712,10 @@ var CourseQSortAPI = (function () {
         protected_slot_penalty: 8.0, population_size: 200,
         max_generations: 500, mutation_rate: 0.05,
         crossover_rate: 0.85, timeout_seconds: 300,
+        period_groups: [[1, 4], [5, 8], [9, 12]],
+        allow_cross_period: false,
+        align_sessions: true,
+        later_period_weight: 0.0,
         updated_at: "2026-05-20T10:30:00Z", updated_by: "张教务"
     };
 
@@ -766,6 +817,214 @@ var CourseQSortAPI = (function () {
         return {};
     });
 
+    // ---- 必修课分配 mock ----
+    var _mockAssignments = [];
+    var _mockAssignmentNextId = 1;
+
+    registerMockPattern('POST', '/admin/courses/{id}/assign/', function (body, vars) {
+        var courseId = parseInt(vars.id);
+        var course = getCourseById(courseId);
+        if (!course) { var err = new Error('Course not found'); err.status = 404; throw err; }
+
+        var majorId = body.major_id || null;
+        var grade = body.grade || '';
+        var classId = body.class_identification || '';
+
+        if (!majorId && !grade && !classId) {
+            var err = new Error('至少需要指定专业、年级或班级之一');
+            err.status = 400; err.data = { detail: '至少需要指定专业、年级或班级之一' };
+            throw err;
+        }
+
+        // Mock: 查找匹配的学生
+        var majorObj = majorId ? MOCK_MAJORS.find(function(m) { return m.id === majorId; }) : null;
+        var mockStudentCount = majorObj ? (majorObj.student_count || 30) : 20;
+        var assignedCount = Math.floor(mockStudentCount * 0.8);
+
+        var assignment = {
+            id: _mockAssignmentNextId++,
+            course: courseId, major: majorId,
+            major_name: majorObj ? majorObj.name : '',
+            grade: grade, class_identification: classId,
+            created_at: new Date().toISOString()
+        };
+        _mockAssignments.push(assignment);
+
+        // 标记课程为必修
+        if (MOCK_MANDATORY_IDS.indexOf(courseId) === -1) {
+            MOCK_MANDATORY_IDS.push(courseId);
+        }
+        // 自动为学生选课
+        var alreadySelected = mockSelected.some(function(sc) { return sc.course_id === courseId; });
+        if (!alreadySelected) {
+            mockSelected.push({
+                course_id: course.course_id, name: course.name,
+                credit: course.credit, teacher: course.teacher,
+                time_slots: JSON.parse(JSON.stringify(course.time_slots)),
+                mandatory: true
+            });
+        }
+
+        return {
+            assignment_id: assignment.id,
+            created: true,
+            total_matched: mockStudentCount,
+            assigned_count: assignedCount,
+            skipped_count: mockStudentCount - assignedCount,
+            message: '成功为 ' + assignedCount + ' 名学生分配必修课「' + course.name + '」'
+        };
+    });
+
+    registerMockPattern('GET', '/admin/courses/{id}/assignments/', function (body, vars) {
+        var courseId = parseInt(vars.id);
+        return _mockAssignments.filter(function(a) { return a.course === courseId; });
+    });
+
+    registerMockPattern('DELETE', '/admin/course-assignments/{id}/', function (body, vars) {
+        var id = parseInt(vars.id);
+        var before = _mockAssignments.length;
+        _mockAssignments = _mockAssignments.filter(function(a) { return a.id !== id; });
+        if (_mockAssignments.length === before) { var err = new Error('Not found'); err.status = 404; throw err; }
+        return {};
+    });
+
+    registerMock('POST', '/admin/courses/import/', function (body) {
+        // Mock JSON 导入：在预览模式下真正读取 JSON 文件
+        var file = body.get('file');
+        if (!file) {
+            var err = new Error('No file provided');
+            err.status = 400;
+            throw err;
+        }
+        var slStr = body.get('session_length');
+        var defaultSL = slStr ? parseInt(slStr) : 2;
+        return new Promise(function (resolve, reject) {
+            var reader = new FileReader();
+            reader.onload = function (e) {
+                try {
+                    var data = JSON.parse(e.target.result);
+                    // 支持嵌套 rows 格式
+                    var records = [];
+                    if (Array.isArray(data)) {
+                        data.forEach(function (item) {
+                            if (item && typeof item === 'object' && Array.isArray(item.rows)) {
+                                records = records.concat(item.rows);
+                            } else {
+                                records.push(item);
+                            }
+                        });
+                    } else if (data && Array.isArray(data.rows)) {
+                        records = data.rows;
+                    }
+
+                    var addedCourses = 0;
+                    var addedTeachers = 0;
+                    var seenCourseIds = {};
+                    var seenTeachers = {};
+
+                    for (var i = 0; i < records.length; i++) {
+                        var r = records[i];
+                        if (!r || typeof r !== 'object') continue;
+                        var cid = r.courseId;
+                        if (cid && !seenCourseIds[cid]) {
+                            seenCourseIds[cid] = true;
+                            // 检查是否已存在
+                            var exists = false;
+                            for (var j = 0; j < MOCK_COURSES.length; j++) {
+                                if (MOCK_COURSES[j].course_id === cid) { exists = true; break; }
+                            }
+                            if (!exists) {
+                                var teacherNames = (r.teachingName || '').split(',').map(function(t){return t.trim();}).filter(Boolean);
+                                var isPro = (r.courseCategoryName === '专必' || r.courseCategoryName === '专选');
+                                var nextId = Math.max.apply(null, MOCK_COURSES.map(function(c){return c.course_id;})) + 1;
+                                MOCK_COURSES.push({
+                                    course_id: nextId,
+                                    name: r.courseName || '',
+                                    code: r.courseNum || '',
+                                    credit: parseFloat(r.score) || 0,
+                                    teacher: teacherNames.join(', '),
+                                    capacity: parseInt(r.limitNumber) || 100,
+                                    enrolled_count: 0,
+                                    time_slots: [],
+                                    is_professional: isPro,
+                                    category: r.courseCategoryName || (isPro ? '专必' : '通识'),
+                                    session_length: defaultSL
+                                });
+                                addedCourses++;
+                                for (var k = 0; k < teacherNames.length; k++) {
+                                    if (!seenTeachers[teacherNames[k]]) {
+                                        seenTeachers[teacherNames[k]] = true;
+                                        addedTeachers++;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    resolve({
+                        imported_count: addedCourses,
+                        total_records: records.length,
+                        majors: 1,
+                        teachers: addedTeachers,
+                        classrooms: 1,
+                        courses: addedCourses,
+                        schedule_items: 0,
+                        errors: []
+                    });
+                } catch (err) {
+                    reject(err);
+                }
+            };
+            reader.onerror = function () {
+                reject(new Error('文件读取失败'));
+            };
+            reader.readAsText(file);
+        });
+    });
+
+    registerMock('GET', '/admin/courses/export/', function () {
+        // Mock 导出：将 MOCK_COURSES 序列化为 JSON
+        var data = MOCK_COURSES.map(function (c) {
+            return {
+                id: c.course_id,
+                courseId: String(c.course_id),
+                courseName: c.name,
+                courseNum: c.code || '',
+                credit: c.credit,
+                hours: c.hours || 48,
+                semester: '2026-spring',
+                campus: '',
+                major: '',
+                teachers: c.teacher ? c.teacher.split(',').map(function(t){return t.trim();}) : [],
+                is_professional_course: c.is_professional || false,
+                expected_student_count: c.capacity,
+                session_length: c.session_length || 2
+            };
+        });
+        return data;
+    });
+
+    registerMock('POST', '/admin/courses/batch_delete/', function (body) {
+        var ids = body.ids || [];
+        var before = MOCK_COURSES.length;
+        MOCK_COURSES = MOCK_COURSES.filter(function (c) {
+            return ids.indexOf(c.course_id) === -1;
+        });
+        return { deleted: before - MOCK_COURSES.length };
+    });
+
+    registerMock('POST', '/admin/courses/delete_all/', function (body) {
+        // Mock 模式下任意非空密码都通过
+        if (!body.password) {
+            var err = new Error('请输入教务密码');
+            err.status = 400;
+            throw err;
+        }
+        var count = MOCK_COURSES.length;
+        MOCK_COURSES = [];
+        return { deleted: count };
+    });
+
     registerMock('GET', '/admin/teachers/', function () {
         return { count: MOCK_TEACHERS.length, results: MOCK_TEACHERS };
     });
@@ -805,6 +1064,168 @@ var CourseQSortAPI = (function () {
         return {};
     });
 
+    // ---- 教师 导入/导出 mock ----
+    // ---- 通用导入辅助：从 FormData 中读取 JSON 文件 ----
+    function parseImportFormData(body) {
+        return new Promise(function (resolve, reject) {
+            var file = body.get('file');
+            if (!file) { resolve([]); return; }
+            var reader = new FileReader();
+            reader.onload = function () {
+                try {
+                    var data = JSON.parse(reader.result);
+                    if (Array.isArray(data)) resolve(data);
+                    else if (data && Array.isArray(data.rows)) resolve(data.rows);
+                    else resolve([data]);
+                } catch (e) { reject(new Error('JSON 解析失败')); }
+            };
+            reader.onerror = function () { reject(new Error('文件读取失败')); };
+            reader.readAsText(file);
+        });
+    }
+
+    registerMock('GET', '/admin/teachers/export/', function () {
+        return MOCK_TEACHERS.map(function (t) {
+            return { name: t.name, employee_no: t.employee_no, department: t.department, unavailable_slots: t.unavailable_slots || [] };
+        });
+    });
+    registerMock('POST', '/admin/teachers/import_json/', function (body) {
+        return parseImportFormData(body).then(function (records) {
+            var created = 0;
+            records.forEach(function (r) {
+                var exists = MOCK_TEACHERS.some(function (t) { return t.name === r.name; });
+                if (!exists && r.name) {
+                    MOCK_TEACHERS.push({
+                        id: Math.max.apply(null, MOCK_TEACHERS.map(function(t){return t.id;}).concat([0])) + 1,
+                        name: r.name, employee_no: r.employee_no || '', department: r.department || '', unavailable_slots: r.unavailable_slots || []
+                    });
+                    created++;
+                }
+            });
+            return { imported: created, total: records.length };
+        });
+    });
+
+    // ---- 教室 导入/导出 mock ----
+    registerMock('GET', '/admin/classrooms/export/', function () {
+        return MOCK_CLASSROOMS.map(function (r) {
+            return { name: r.name, capacity: r.capacity, building: r.building, is_lab: r.is_lab, equipment_types: r.equipment_types || [] };
+        });
+    });
+    registerMock('POST', '/admin/classrooms/import_json/', function (body) {
+        return parseImportFormData(body).then(function (records) {
+            var created = 0;
+            records.forEach(function (r) {
+                var exists = MOCK_CLASSROOMS.some(function (cr) { return cr.name === r.name && cr.building === r.building; });
+                if (!exists && r.name) {
+                    MOCK_CLASSROOMS.push({
+                        id: Math.max.apply(null, MOCK_CLASSROOMS.map(function(c){return c.id;}).concat([0])) + 1,
+                        name: r.name, capacity: r.capacity || 60, building: r.building || '', is_lab: r.is_lab || false, equipment_types: r.equipment_types || []
+                    });
+                    created++;
+                }
+            });
+            return { imported: created, total: records.length };
+        });
+    });
+
+    // ---- 学生 导入/导出 mock ----
+    registerMock('GET', '/admin/students/export/', function () {
+        return MOCK_STUDENTS.map(function (s) {
+            return { student_no: s.student_no, name: s.name, grade: s.grade, major_name: s.major_name || '', class_identification: s.class_identification || '', class_group_name: s.class_name || '' };
+        });
+    });
+    registerMock('POST', '/admin/students/import_json/', function (body) {
+        return parseImportFormData(body).then(function (records) {
+            var created = 0;
+            records.forEach(function (r) {
+                var exists = MOCK_STUDENTS.some(function (s) { return s.student_no === r.student_no; });
+                if (!exists && r.student_no) {
+                    MOCK_STUDENTS.push({
+                        id: Math.max.apply(null, MOCK_STUDENTS.map(function(s){return s.id;}).concat([0])) + 1,
+                        student_no: r.student_no, name: r.name, grade: r.grade || '', major_name: r.major_name || '', class_identification: r.class_identification || '', class_name: r.class_group_name || ''
+                    });
+                    created++;
+                }
+            });
+            return { imported: created, total: records.length };
+        });
+    });
+
+    // ---- 专业 导入/导出 mock ----
+    registerMock('GET', '/admin/majors/export/', function () {
+        return MOCK_MAJORS.map(function (m) {
+            return { name: m.name, code: m.code || '', student_count: m.student_count };
+        });
+    });
+    registerMock('POST', '/admin/majors/import_json/', function (body) {
+        return parseImportFormData(body).then(function (records) {
+            var created = 0;
+            records.forEach(function (r) {
+                var exists = MOCK_MAJORS.some(function (m) { return m.name === r.name; });
+                if (!exists && r.name) {
+                    MOCK_MAJORS.push({
+                        id: Math.max.apply(null, MOCK_MAJORS.map(function(m){return m.id;}).concat([0])) + 1,
+                        name: r.name, code: r.code || '', student_count: r.student_count || 0
+                    });
+                    created++;
+                }
+            });
+            return { imported: created, total: records.length };
+        });
+    });
+
+    // ---- 班级 导入/导出 mock ----
+    registerMock('GET', '/admin/class-groups/export/', function () {
+        return MOCK_CLASS_GROUPS.map(function (g) {
+            return { name: g.name, grade: g.grade, major_name: g.major_name || '' };
+        });
+    });
+    registerMock('POST', '/admin/class-groups/import_json/', function (body) {
+        return parseImportFormData(body).then(function (records) {
+            var created = 0;
+            records.forEach(function (r) {
+                var exists = MOCK_CLASS_GROUPS.some(function (g) { return g.name === r.name; });
+                if (!exists && r.name) {
+                    MOCK_CLASS_GROUPS.push({
+                        id: Math.max.apply(null, MOCK_CLASS_GROUPS.map(function(g){return g.id;}).concat([0])) + 1,
+                        name: r.name, grade: r.grade || '', major_name: r.major_name || ''
+                    });
+                    created++;
+                }
+            });
+            return { imported: created, total: records.length };
+        });
+    });
+
+    // ---- 必修分配 导入/导出 mock ----
+    registerMock('GET', '/admin/course-assignments/', function () {
+        return { count: MOCK_COURSE_ASSIGNMENTS.length, results: MOCK_COURSE_ASSIGNMENTS };
+    });
+    registerMock('GET', '/admin/course-assignments/export/', function () {
+        return MOCK_COURSE_ASSIGNMENTS.map(function (a) {
+            return { course_name: a.course_name || '', major_name: a.major_name || '', grade: a.grade, class_identification: a.class_identification };
+        });
+    });
+    registerMock('POST', '/admin/course-assignments/import_json/', function (body) {
+        return parseImportFormData(body).then(function (records) {
+            var created = 0;
+            records.forEach(function (r) {
+                var exists = MOCK_COURSE_ASSIGNMENTS.some(function (a) {
+                    return a.course_name === r.course_name && a.major_name === r.major_name && a.grade === r.grade && a.class_identification === r.class_identification;
+                });
+                if (!exists && r.course_name) {
+                    MOCK_COURSE_ASSIGNMENTS.push({
+                        id: Math.max.apply(null, MOCK_COURSE_ASSIGNMENTS.map(function(a){return a.id;}).concat([0])) + 1,
+                        course_name: r.course_name, major_name: r.major_name || '', grade: r.grade || '', class_identification: r.class_identification || ''
+                    });
+                    created++;
+                }
+            });
+            return { imported: created, total: records.length };
+        });
+    });
+
     // ---- 学生 CRUD mock ----
     registerMock('GET', '/admin/students/', function (params) {
         var results = MOCK_STUDENTS;
@@ -821,6 +1242,8 @@ var CourseQSortAPI = (function () {
         var newId = Math.max.apply(null, MOCK_STUDENTS.map(function(s){return s.id;})) + 1;
         var majorId = body.major || 1;
         var majorObj = MOCK_MAJORS.find(function(m) { return m.id === majorId; }) || MOCK_MAJORS[0];
+        var cgId = body.class_group || null;
+        var cgObj = cgId ? MOCK_CLASS_GROUPS.find(function(x) { return x.id === cgId; }) : null;
         var student = {
             id: newId,
             student_no: body.student_no || '',
@@ -828,7 +1251,9 @@ var CourseQSortAPI = (function () {
             major: majorId,
             major_name: majorObj.name,
             grade: body.grade || '',
-            class_identification: body.class_identification || ''
+            class_identification: body.class_identification || (cgObj ? cgObj.name : ''),
+            class_group: cgId,
+            class_name: cgObj ? cgObj.name : ''
         };
         MOCK_STUDENTS.push(student);
         return student;
@@ -846,6 +1271,11 @@ var CourseQSortAPI = (function () {
                     if (m) MOCK_STUDENTS[i].major_name = m.name;
                 }
                 if (body.grade !== undefined) MOCK_STUDENTS[i].grade = body.grade;
+                if (body.class_group !== undefined) {
+                    MOCK_STUDENTS[i].class_group = body.class_group;
+                    var cg = body.class_group ? MOCK_CLASS_GROUPS.find(function(x) { return x.id === body.class_group; }) : null;
+                    if (cg) { MOCK_STUDENTS[i].class_name = cg.name; MOCK_STUDENTS[i].class_identification = cg.name; }
+                }
                 if (body.class_identification !== undefined) MOCK_STUDENTS[i].class_identification = body.class_identification;
                 return MOCK_STUDENTS[i];
             }
@@ -859,6 +1289,55 @@ var CourseQSortAPI = (function () {
         MOCK_STUDENTS = MOCK_STUDENTS.filter(function (s) { return s.id !== id; });
         if (MOCK_STUDENTS.length === before) { var err = new Error('Not found'); err.status = 404; throw err; }
         return {};
+    });
+
+    // ---- 班级 mock ----
+    registerMock('GET', '/admin/class-groups/', function () {
+        return { count: MOCK_CLASS_GROUPS.length, results: MOCK_CLASS_GROUPS };
+    });
+
+    registerMock('POST', '/admin/class-groups/', function (body) {
+        var newId = Math.max.apply(null, MOCK_CLASS_GROUPS.map(function(cg){return cg.id;})) + 1;
+        var majorId = body.major || body.major_id || 1;
+        var majorObj = MOCK_MAJORS.find(function(m) { return m.id === majorId; }) || MOCK_MAJORS[0];
+        var cg = {
+            id: newId, name: body.name || '',
+            major: majorId, major_name: majorObj.name,
+            grade: body.grade || ''
+        };
+        MOCK_CLASS_GROUPS.push(cg);
+        return cg;
+    });
+
+    registerMockPattern('PATCH', '/admin/class-groups/{id}/', function (body, vars) {
+        var id = parseInt(vars.id);
+        for (var i = 0; i < MOCK_CLASS_GROUPS.length; i++) {
+            if (MOCK_CLASS_GROUPS[i].id === id) {
+                if (body.name !== undefined) MOCK_CLASS_GROUPS[i].name = body.name;
+                if (body.grade !== undefined) MOCK_CLASS_GROUPS[i].grade = body.grade;
+                if (body.major !== undefined || body.major_id !== undefined) {
+                    var mid = body.major || body.major_id;
+                    MOCK_CLASS_GROUPS[i].major = mid;
+                    var mo = MOCK_MAJORS.find(function(m) { return m.id === mid; });
+                    if (mo) MOCK_CLASS_GROUPS[i].major_name = mo.name;
+                }
+                return MOCK_CLASS_GROUPS[i];
+            }
+        }
+        var err = new Error('Not found'); err.status = 404; throw err;
+    });
+
+    registerMockPattern('DELETE', '/admin/class-groups/{id}/', function (body, vars) {
+        var id = parseInt(vars.id);
+        var before = MOCK_CLASS_GROUPS.length;
+        MOCK_CLASS_GROUPS = MOCK_CLASS_GROUPS.filter(function(cg) { return cg.id !== id; });
+        if (MOCK_CLASS_GROUPS.length === before) { var err = new Error('Not found'); err.status = 404; throw err; }
+        return {};
+    });
+
+    registerMockPattern('GET', '/admin/majors/{id}/classes/', function (body, vars) {
+        var majorId = parseInt(vars.id);
+        return MOCK_CLASS_GROUPS.filter(function(cg) { return cg.major === majorId; });
     });
 
     registerMock('GET', '/admin/classrooms/', function () {
@@ -987,25 +1466,37 @@ var CourseQSortAPI = (function () {
         for (var i = 0; i < MOCK_SCHEDULE_PLANS.length; i++) {
             if (MOCK_SCHEDULE_PLANS[i].id === id) { plan = MOCK_SCHEDULE_PLANS[i]; break; }
         }
-        if (!plan) return {};
-        // 生成 mock entries（使用真实教师名称和多样化教室）
-        var classrooms = ['A101', 'A102', 'B201', 'B203', 'C301', 'D101', 'D202', 'E401'];
-        var entries = MOCK_COURSES.slice(0, 20).map(function(c, idx) {
-            var slots = c.time_slots || [];
-            return slots.map(function(s) {
-                var roomName = classrooms[(idx + s.day_of_week + s.period) % classrooms.length];
-                return {
-                    id: idx * 10 + s.day_of_week * 11 + s.period,
-                    course: { id: c.course_id, name: c.name },
-                    teacher: { id: (idx % 5) + 1, name: c.teacher },
-                    classroom: { id: (idx % 8) + 1, name: roomName },
-                    day_of_week: s.day_of_week,
-                    period: s.period,
-                    student_group_ids: []
-                };
-            });
-        }).flat();
-        plan.entries = entries;
+        // Mock 模式下，如果方案不存在（新标签页 JS 上下文丢失），从 MOCK_COURSES 生成
+        if (!plan) {
+            plan = {
+                id: id, plan_name: '预览方案 #' + id, semester: '2026-spring',
+                status: 'DRAFT', overall_fitness: (0.8 + Math.random() * 0.15).toFixed(2),
+                created_at: new Date().toISOString(), published_at: null
+            };
+        }
+        // 如果方案已有条目就用已有的，否则从 MOCK_COURSES 生成
+        if (!plan.entries || plan.entries.length === 0) {
+            var classrooms = ['A101', 'A102', 'B201', 'B203', 'C301', 'D101', 'D202', 'E401'];
+            var entries = MOCK_COURSES.map(function(c, idx) {
+                var slots = (c.time_slots && c.time_slots.length > 0) ? c.time_slots : [
+                    { day_of_week: (idx % 5) + 1, period: ((idx * 2) % 11) + 1 }
+                ];
+                return slots.map(function(s) {
+                    var roomName = classrooms[(idx + s.day_of_week + s.period) % classrooms.length];
+                    return {
+                        id: idx * 100 + s.day_of_week * 11 + s.period,
+                        course: { id: c.course_id, name: c.name, code: c.code || '', credit: c.credit },
+                        teacher: { id: (idx % 8) + 1, name: c.teacher || '未知教师' },
+                        classroom: { id: (idx % 8) + 1, name: roomName },
+                        day_of_week: s.day_of_week,
+                        period: s.period,
+                        week: 1,
+                        student_group_ids: []
+                    };
+                });
+            }).flat();
+            plan.entries = entries;
+        }
         return plan;
     });
 
@@ -1017,32 +1508,118 @@ var CourseQSortAPI = (function () {
         };
     });
 
+    registerMock('GET', '/teacher/schedule/', function (params) {
+        // Mock 模式：按 teacher_id 或 teacher name 筛选课程
+        var tid = params ? parseInt(params.teacher_id) : 0;
+        var MOCK_TEACHER_NAMES = {1:'张教授',2:'李老师',3:'王教授',4:'赵教授',5:'陈老师'};
+        var tname = MOCK_TEACHER_NAMES[tid] || '';
+        var teacher = MOCK_TEACHERS.find(function(t){return t.id === tid;});
+        var classrooms = ['A101', 'A102', 'B201', 'C301', 'D101'];
+
+        var courses = MOCK_COURSES.filter(function(c) {
+            return tname && c.teacher === tname;
+        }).map(function(c, idx) {
+            // 给每个课程的 time_slots 添加 week 和 classroom 信息
+            var room = classrooms[idx % classrooms.length];
+            return {
+                course_id: c.course_id,
+                name: c.name,
+                code: c.code || '',
+                credit: c.credit,
+                hours: c.hours || 48,
+                is_professional_course: c.is_professional,
+                expected_student_count: c.capacity,
+                time_slots: (c.time_slots || []).map(function(s, si) {
+                    // 模拟不同周段：前9周和后9周可能有不同教室
+                    return {
+                        day_of_week: s.day_of_week,
+                        period: s.period,
+                        week_start: 1,
+                        week_end: 18,
+                        classroom: room
+                    };
+                })
+            };
+        });
+
+        return {
+            teacher: teacher ? {id:teacher.id, name:teacher.name, employee_no:teacher.employee_no, department:teacher.department} : null,
+            courses: courses,
+            total_courses: courses.length
+        };
+    });
+
     registerMockPattern('POST', '/admin/schedule/plans/{id}/publish/', function (body, vars) {
         var id = parseInt(vars.id);
         for (var i = 0; i < MOCK_SCHEDULE_PLANS.length; i++) {
             if (MOCK_SCHEDULE_PLANS[i].id === id) {
                 MOCK_SCHEDULE_PLANS[i].status = 'PUBLISHED';
                 MOCK_SCHEDULE_PLANS[i].published_at = new Date().toISOString();
-                return { plan_id: id, status: 'PUBLISHED', published_at: MOCK_SCHEDULE_PLANS[i].published_at };
+                var planEntries = MOCK_SCHEDULE_PLANS[i].entries || [];
+                var courseIds = {};
+                planEntries.forEach(function(e) { if (e.course) courseIds[e.course.id] = true; });
+                return { plan_id: id, status: 'PUBLISHED', published_at: MOCK_SCHEDULE_PLANS[i].published_at, synced_courses: Object.keys(courseIds).length, synced_items: planEntries.length };
             }
         }
         return {};
     });
 
+    var _mockPlanEntryId = 1;
+    var _mockTaskStore = {};
+
     registerMock('POST', '/admin/schedule/generate/', function (body) {
-        var taskId = 'mock_task_' + Date.now();
+        var classrooms = ['A101', 'A102', 'B201', 'B203', 'C301', 'D101', 'D202', 'E401'];
+        var planId = Date.now();
+        var entries = [];
+        MOCK_COURSES.forEach(function (c, idx) {
+            var slots = (c.time_slots && c.time_slots.length > 0) ? c.time_slots : [
+                { day_of_week: (idx % 5) + 1, period: ((idx * 2) % 11) + 1 },
+                { day_of_week: (idx % 5) + 1, period: ((idx * 2 + 1) % 11) + 1 }
+            ];
+            slots.forEach(function (s) {
+                var roomName = classrooms[(idx + s.day_of_week + s.period) % classrooms.length];
+                entries.push({
+                    id: _mockPlanEntryId++,
+                    course: { id: c.course_id, name: c.name, code: c.code || '', credit: c.credit },
+                    teacher: { id: (idx % 8) + 1, name: c.teacher || '未知教师' },
+                    classroom: { id: (idx % 8) + 1, name: roomName },
+                    day_of_week: s.day_of_week,
+                    period: s.period,
+                    week: 1,
+                    student_group_ids: []
+                });
+            });
+        });
         var newPlan = {
-            id: Date.now(), plan_name: body.plan_name || '新方案',
+            id: planId, plan_name: body.plan_name || '新方案',
             semester: body.semester || '2026-spring', status: 'DRAFT',
             overall_fitness: (0.8 + Math.random() * 0.15).toFixed(2),
-            created_at: new Date().toISOString(), published_at: null
+            created_at: new Date().toISOString(), published_at: null,
+            entries: entries
         };
         MOCK_SCHEDULE_PLANS.unshift(newPlan);
+        var taskId = 'mock_task_' + planId;
+        // 记录任务开始时间，模拟 3-5 秒的渐进式生成
+        _mockTaskStore[taskId] = { startTime: Date.now(), planId: planId, totalEntries: entries.length };
         return { task_id: taskId, status: 'PENDING' };
     });
 
     registerMockPattern('GET', '/admin/schedule/tasks/{id}/', function (body, vars) {
-        return { task_id: vars.id, status: 'SUCCESS', progress: 1.0, current_generation: 500, best_fitness: 0.93, plan_id: 3 };
+        var taskId = vars.id;
+        var stored = _mockTaskStore[taskId];
+        if (!stored) {
+            // 新标签页：直接返回完成
+            return { task_id: taskId, status: 'SUCCESS', progress: 1.0, current_generation: 200 + Math.floor(Math.random() * 300), best_fitness: (0.85 + Math.random() * 0.12).toFixed(2), total_entries: 156 };
+        }
+        var elapsed = (Date.now() - stored.startTime) / 1000;
+        var duration = 3 + Math.random() * 2; // 3-5 秒完成
+        var progress = Math.min(1.0, elapsed / duration);
+        var gen = Math.floor(progress * (200 + Math.floor(Math.random() * 300)));
+        var fitness = (0.5 + progress * 0.4 + Math.random() * 0.05).toFixed(2);
+        if (progress >= 1.0) {
+            return { task_id: taskId, status: 'SUCCESS', progress: 1.0, current_generation: gen, best_fitness: parseFloat(fitness), total_entries: stored.totalEntries };
+        }
+        return { task_id: taskId, status: 'RUNNING', progress: progress, current_generation: gen, best_fitness: parseFloat(fitness), total_entries: 0 };
     });
 
     registerMock('POST', '/admin/conflict-analysis/run/', function () {
@@ -1050,7 +1627,7 @@ var CourseQSortAPI = (function () {
     });
 
     registerMockPattern('GET', '/admin/conflict-analysis/tasks/{id}/', function (body, vars) {
-        return { task_id: vars.id, status: 'SUCCESS', progress: 1.0, analyzed_pairs: 2400, total_pairs: 2400, conflict_pairs_found: 15 };
+        return { task_id: vars.id, status: 'SUCCESS', progress: 1.0, analyzed_pairs: 1225, total_pairs: 1225, conflict_pairs_found: 8 };
     });
 
     registerMock('GET', '/admin/conflict-analysis/results/', function () {
@@ -1059,10 +1636,15 @@ var CourseQSortAPI = (function () {
 
     registerMockPattern('GET', '/admin/conflict-analysis/results/{id}/pairs/', function (body, vars) {
         return {
-            count: 3, results: [
-                { course_a: { id: 101, name: "数据结构" }, course_b: { id: 207, name: "经济学原理" }, conflicting_student_count: 56, conflict_rate: 0.47 },
-                { course_a: { id: 102, name: "操作系统" }, course_b: { id: 305, name: "人工智能导论" }, conflicting_student_count: 42, conflict_rate: 0.35 },
-                { course_a: { id: 103, name: "计算机组成原理" }, course_b: { id: 401, name: "离散数学" }, conflicting_student_count: 38, conflict_rate: 0.31 },
+            count: 8, results: [
+                { id: 1, course_a: { id: 101, name: "数据结构", code: "CS201", hours: 64 }, course_b: { id: 207, name: "经济学原理", code: "ECON101", hours: 48 }, conflicting_student_count: 56, conflict_rate: 0.47, overlapping_slots: [{day:1,day_name:"周一",period:3},{day:1,day_name:"周一",period:4},{day:3,day_name:"周三",period:3}] },
+                { id: 2, course_a: { id: 102, name: "操作系统", code: "CS301", hours: 64 }, course_b: { id: 305, name: "人工智能导论", code: "CS305", hours: 48 }, conflicting_student_count: 42, conflict_rate: 0.35, overlapping_slots: [{day:2,day_name:"周二",period:1},{day:2,day_name:"周二",period:2},{day:4,day_name:"周四",period:1}] },
+                { id: 3, course_a: { id: 103, name: "计算机组成原理", code: "CS202", hours: 64 }, course_b: { id: 401, name: "离散数学", code: "MATH201", hours: 48 }, conflicting_student_count: 38, conflict_rate: 0.31, overlapping_slots: [{day:3,day_name:"周三",period:5},{day:3,day_name:"周三",period:6}] },
+                { id: 4, course_a: { id: 104, name: "计算机网络", code: "CS302", hours: 48 }, course_b: { id: 306, name: "软件工程", code: "CS303", hours: 48 }, conflicting_student_count: 35, conflict_rate: 0.29, overlapping_slots: [{day:5,day_name:"周五",period:3},{day:5,day_name:"周五",period:4}] },
+                { id: 5, course_a: { id: 105, name: "数据库原理", code: "CS203", hours: 64 }, course_b: { id: 208, name: "管理学", code: "MGMT101", hours: 32 }, conflicting_student_count: 28, conflict_rate: 0.23, overlapping_slots: [{day:1,day_name:"周一",period:7}] },
+                { id: 6, course_a: { id: 106, name: "编译原理", code: "CS401", hours: 48 }, course_b: { id: 307, name: "计算机图形学", code: "CS402", hours: 48 }, conflicting_student_count: 22, conflict_rate: 0.18, overlapping_slots: [{day:4,day_name:"周四",period:3},{day:4,day_name:"周四",period:4}] },
+                { id: 7, course_a: { id: 107, name: "线性代数", code: "MATH102", hours: 48 }, course_b: { id: 209, name: "概率论", code: "MATH202", hours: 48 }, conflicting_student_count: 19, conflict_rate: 0.16, overlapping_slots: [{day:2,day_name:"周二",period:5}] },
+                { id: 8, course_a: { id: 108, name: "大学英语", code: "ENG101", hours: 64 }, course_b: { id: 210, name: "大学体育", code: "PE101", hours: 32 }, conflicting_student_count: 12, conflict_rate: 0.10, overlapping_slots: [{day:5,day_name:"周五",period:9}] },
             ]
         };
     });
@@ -1099,6 +1681,7 @@ var CourseQSortAPI = (function () {
         setLoginMode: setLoginMode,
         getLoginMode: getLoginMode,
         isAuthenticated: isAuthenticated,
+        getUserRole: function () { return sessionStorage.getItem('userRole') || ''; },
 
         _mockSelected: mockSelected,
         _buildBitmap: buildBitmap,
@@ -1107,8 +1690,11 @@ var CourseQSortAPI = (function () {
         _getMockCourseList: getMockCourseList,
 
         auth: {
-            login: function (username, password) {
-                return apiCall('POST', '/auth/login/', { username: username, password: password });
+            login: function (username, password, role) {
+                return apiCall('POST', '/auth/login/', { username: username, password: password, role: role || '' });
+            },
+            register: function (payload) {
+                return apiCall('POST', '/auth/register/', payload);
             },
             logout: function () {
                 var refresh = getRefreshToken();
@@ -1117,6 +1703,14 @@ var CourseQSortAPI = (function () {
                 return Promise.resolve({ detail: 'Logged out' });
             },
             me: function () { return apiCall('GET', '/auth/me/'); }
+        },
+
+        teacher: {
+            getSchedule: function (teacherId) {
+                var path = '/teacher/schedule/';
+                if (teacherId) path += '?teacher_id=' + teacherId;
+                return apiCall('GET', path);
+            }
         },
 
         student: {
@@ -1149,27 +1743,57 @@ var CourseQSortAPI = (function () {
         },
 
         admin: {
-            getCourses: function (params) { return apiCall('GET', '/admin/courses/'); },
+            getCourses: function (params) { return apiCall('GET', '/admin/courses/?page_size=10000'); },
             createCourse: function (data) { return apiCall('POST', '/admin/courses/', data); },
             updateCourse: function (id, data) { return apiCall('PATCH', '/admin/courses/' + id + '/', data); },
             deleteCourse: function (id) { return apiCall('DELETE', '/admin/courses/' + id + '/'); },
-            getTeachers: function (params) { return apiCall('GET', '/admin/teachers/'); },
+            assignCourse: function (courseId, data) { return apiCall('POST', '/admin/courses/' + courseId + '/assign/', data); },
+            getCourseAssignments: function (courseId) { return apiCall('GET', '/admin/courses/' + courseId + '/assignments/'); },
+            deleteCourseAssignment: function (id) { return apiCall('DELETE', '/admin/course-assignments/' + id + '/'); },
+            importCoursesJSON: function (file, sessionLength) {
+                var formData = new FormData();
+                formData.append('file', file);
+                if (sessionLength != null) formData.append('session_length', String(sessionLength));
+                return apiCall('POST', '/admin/courses/import/', formData, { isFormData: true });
+            },
+            exportCoursesJSON: function () { return apiCall('GET', '/admin/courses/export/'); },
+            batchDeleteCourses: function (ids) { return apiCall('POST', '/admin/courses/batch_delete/', { ids: ids }); },
+            deleteAllCourses: function (password) { return apiCall('POST', '/admin/courses/delete_all/', { password: password }); },
+            getTeachers: function (params) { return apiCall('GET', '/admin/teachers/?page_size=10000'); },
             createTeacher: function (data) { return apiCall('POST', '/admin/teachers/', data); },
             updateTeacher: function (id, data) { return apiCall('PATCH', '/admin/teachers/' + id + '/', data); },
             deleteTeacher: function (id) { return apiCall('DELETE', '/admin/teachers/' + id + '/'); },
-            getClassrooms: function () { return apiCall('GET', '/admin/classrooms/'); },
+            exportTeachersJSON: function () { return apiCall('GET', '/admin/teachers/export/'); },
+            importTeachersJSON: function (file) { var fd = new FormData(); fd.append('file', file); return apiCall('POST', '/admin/teachers/import_json/', fd, { isFormData: true }); },
+            getClassrooms: function () { return apiCall('GET', '/admin/classrooms/?page_size=10000'); },
             createClassroom: function (data) { return apiCall('POST', '/admin/classrooms/', data); },
             updateClassroom: function (id, data) { return apiCall('PATCH', '/admin/classrooms/' + id + '/', data); },
             deleteClassroom: function (id) { return apiCall('DELETE', '/admin/classrooms/' + id + '/'); },
-            getStudents: function (params) { return apiCall('GET', '/admin/students/'); },
+            exportClassroomsJSON: function () { return apiCall('GET', '/admin/classrooms/export/'); },
+            importClassroomsJSON: function (file) { var fd = new FormData(); fd.append('file', file); return apiCall('POST', '/admin/classrooms/import_json/', fd, { isFormData: true }); },
+            getStudents: function (params) { return apiCall('GET', '/admin/students/?page_size=10000'); },
             createStudent: function (data) { return apiCall('POST', '/admin/students/', data); },
             updateStudent: function (id, data) { return apiCall('PATCH', '/admin/students/' + id + '/', data); },
             deleteStudent: function (id) { return apiCall('DELETE', '/admin/students/' + id + '/'); },
-            getMajors: function () { return apiCall('GET', '/admin/majors/'); },
+            exportStudentsJSON: function () { return apiCall('GET', '/admin/students/export/'); },
+            importStudentsJSON: function (file) { var fd = new FormData(); fd.append('file', file); return apiCall('POST', '/admin/students/import_json/', fd, { isFormData: true }); },
+            getMajors: function () { return apiCall('GET', '/admin/majors/?page_size=10000'); },
             createMajor: function (data) { return apiCall('POST', '/admin/majors/', data); },
             updateMajor: function (id, data) { return apiCall('PATCH', '/admin/majors/' + id + '/', data); },
             deleteMajor: function (id) { return apiCall('DELETE', '/admin/majors/' + id + '/'); },
+            exportMajorsJSON: function () { return apiCall('GET', '/admin/majors/export/'); },
+            importMajorsJSON: function (file) { var fd = new FormData(); fd.append('file', file); return apiCall('POST', '/admin/majors/import_json/', fd, { isFormData: true }); },
             getMajorStudents: function (majorId) { return apiCall('GET', '/admin/majors/' + majorId + '/students/'); },
+            getMajorClasses: function (majorId) { return apiCall('GET', '/admin/majors/' + majorId + '/classes/'); },
+            getClassGroups: function () { return apiCall('GET', '/admin/class-groups/?page_size=10000'); },
+            createClassGroup: function (data) { return apiCall('POST', '/admin/class-groups/', data); },
+            updateClassGroup: function (id, data) { return apiCall('PATCH', '/admin/class-groups/' + id + '/', data); },
+            deleteClassGroup: function (id) { return apiCall('DELETE', '/admin/class-groups/' + id + '/'); },
+            exportClassGroupsJSON: function () { return apiCall('GET', '/admin/class-groups/export/'); },
+            importClassGroupsJSON: function (file) { var fd = new FormData(); fd.append('file', file); return apiCall('POST', '/admin/class-groups/import_json/', fd, { isFormData: true }); },
+            getCourseAssignmentsList: function () { return apiCall('GET', '/admin/course-assignments/?page_size=10000'); },
+            exportCourseAssignmentsJSON: function () { return apiCall('GET', '/admin/course-assignments/export/'); },
+            importCourseAssignmentsJSON: function (file) { var fd = new FormData(); fd.append('file', file); return apiCall('POST', '/admin/course-assignments/import_json/', fd, { isFormData: true }); },
 
             getProtectedSlots: function () { return apiCall('GET', '/admin/protected-slots/'); },
             addProtectedSlot: function (data) { return apiCall('POST', '/admin/protected-slots/', data); },

@@ -8,9 +8,12 @@
 
 ```
 frontend/
-├── index.html       # 学生端 — 选课主页
-├── login.html       # 学生端 — 登录（双模式）
+├── index.html       # 登录页 — 登录（双模式）
+├── student.html     # 学生端 — 选课主页
+├── register.html    # 注册页
+├── teacher.html     # 教师端 — 课表查看
 ├── schedule.html    # 学生端 — 课表打印
+├── timetable.html   # 课表视图
 ├── admin.html       # 教务端 — 管理后台
 ├── css/
 │   └── style.css
@@ -46,7 +49,7 @@ CourseQSortAPI.setMockMode(false)
 
 ### 预览模式（推荐，无需后端）
 
-用浏览器直接打开 `login.html` → 选择「预览模式」→ 输入任意姓名和学号 → 进入选课系统。
+用浏览器直接打开 `index.html` → 选择「预览模式」→ 输入任意姓名和学号 → 进入选课系统。
 
 或直接打开 `admin.html` 进入教务管理端。
 
@@ -61,7 +64,7 @@ CourseQSortAPI.setMockMode(false)
 cd backend/backend_code
 python manage.py runserver 8000
 
-# 2. 浏览器打开 login.html，切换到「后端模式」
+# 2. 浏览器打开 index.html，切换到「后端模式」
 # 3. 用 username + password 登录
 ```
 
@@ -71,11 +74,11 @@ python manage.py runserver 8000
 
 | 页面 | 功能 | 预览模式 | 后端模式 |
 |------|------|---------|---------|
-| login.html | 双模式登录（JWT / 模拟） | 姓名+学号 | username+password |
-| index.html | 课程列表（分页） | 50门 Mock 课程 | GET /student/courses/ |
-| index.html | 冲突检测 + 标记 | 客户端位图 O(1) | 后端返回 conflict 字段 |
-| index.html | 选课 / 退课 | 本地模拟 | POST /select/ / DELETE /drop/ |
-| index.html | 空闲时段推荐 | 客户端计算 | GET /free-slots/ + /recommend/ |
+| index.html | 双模式登录（JWT / 模拟） | 姓名+学号 | username+password |
+| student.html | 课程列表（分页） | 50门 Mock 课程 | GET /student/courses/ |
+| student.html | 冲突检测 + 标记 | 客户端位图 O(1) | 后端返回 conflict 字段 |
+| student.html | 选课 / 退课 | 本地模拟 | POST /select/ / DELETE /drop/ |
+| student.html | 空闲时段推荐 | 客户端计算 | GET /free-slots/ + /recommend/ |
 | schedule.html | 课表打印 | sessionStorage / API | GET /student/schedule/ |
 | admin.html | 概览统计 | Mock 数据 | GET /admin/courses/teachers/... |
 | admin.html | 课程管理 | Mock 50 门 | GET /admin/courses/ |
@@ -156,12 +159,4 @@ Bootstrap 5（CDN）
 
 ---
 
-## Frontend E2E
-
-```bash
-cd frontend
-npm install
-npm run test:e2e
-```
-
----
+> 开发阶段由 [Codex](https://codex.ai) 辅助完成

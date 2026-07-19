@@ -2,7 +2,7 @@ import uuid
 
 from rest_framework import serializers
 
-from apps.courses.models import Classroom, Course, Major, Student, Teacher
+from apps.courses.models import ClassGroup, Classroom, Course, CourseAssignment, Major, Student, Teacher
 
 
 class MajorSerializer(serializers.ModelSerializer):
@@ -25,10 +25,35 @@ class ClassroomSerializer(serializers.ModelSerializer):
 
 class StudentSerializer(serializers.ModelSerializer):
     major_name = serializers.SerializerMethodField(read_only=True)
+    class_name = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = Student
-        fields = ["id", "student_no", "name", "major", "major_name", "grade", "class_identification"]
+        fields = [
+            "id",
+            "student_no",
+            "name",
+            "major",
+            "major_name",
+            "grade",
+            "class_identification",
+            "class_group",
+            "class_name",
+        ]
+
+    def get_major_name(self, obj):
+        return obj.major.name if obj.major else ""
+
+    def get_class_name(self, obj):
+        return obj.class_group.name if obj.class_group else (obj.class_identification or "")
+
+
+class ClassGroupSerializer(serializers.ModelSerializer):
+    major_name = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = ClassGroup
+        fields = ["id", "name", "major", "major_name", "grade"]
 
     def get_major_name(self, obj):
         return obj.major.name if obj.major else ""
@@ -67,9 +92,22 @@ class CourseListSerializer(serializers.ModelSerializer):
         ]
 
 
+class CourseAssignmentSerializer(serializers.ModelSerializer):
+    major_name = serializers.SerializerMethodField(read_only=True)
+
+    class Meta:
+        model = CourseAssignment
+        fields = ["id", "course", "major", "major_name", "grade", "class_identification", "created_at"]
+        read_only_fields = ["id", "created_at"]
+
+    def get_major_name(self, obj):
+        return obj.major.name if obj.major else ""
+
+
 class CourseDetailSerializer(serializers.ModelSerializer):
     major = NestedMajorSerializer(read_only=True)
     teachers = NestedTeacherSerializer(many=True, read_only=True)
+    assignments = CourseAssignmentSerializer(many=True, read_only=True)
 
     class Meta:
         model = Course
@@ -88,6 +126,7 @@ class CourseDetailSerializer(serializers.ModelSerializer):
             "semester",
             "created_at",
             "session_length",
+            "assignments",
         ]
 
 

@@ -6,12 +6,25 @@ class CourseTimeSlotSerializer(serializers.Serializer):
     period = serializers.IntegerField()
 
 
+class CourseSegmentSerializer(serializers.Serializer):
+    """课程的一个时间段（同一周次范围 + 同一教室）"""
+
+    week_start = serializers.IntegerField()
+    week_end = serializers.IntegerField()
+    time_slots = CourseTimeSlotSerializer(many=True)
+    classroom = serializers.CharField(required=False, default="")
+    teacher = serializers.CharField(required=False, default="")
+
+
 class ScheduleCourseSerializer(serializers.Serializer):
     course_id = serializers.IntegerField()
     name = serializers.CharField()
+    credit = serializers.FloatField()
     teacher = serializers.CharField()
-    time_slots = CourseTimeSlotSerializer(many=True)
-    classroom = serializers.CharField()
+    time_slots = CourseTimeSlotSerializer(many=True)  # 向后兼容：所有时间段的合集
+    classroom = serializers.CharField(required=False, default="")
+    mandatory = serializers.BooleanField(default=False)
+    segments = CourseSegmentSerializer(many=True, required=False)  # 新增：分时段列表
 
 
 class ScheduleSerializer(serializers.Serializer):

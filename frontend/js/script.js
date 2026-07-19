@@ -1,13 +1,6 @@
-// ================================================================
-// CourseQSort 选课系统 — 前端 UI 控制器
-// 数据来源: CourseQSortAPI (支持 Mock / 真实后端双模式)
-// ================================================================
-
-// ======================== 登录检查 ========================
-
 (function checkLogin() {
-    if (!CourseQSortAPI.isAuthenticated()) {
-        window.location.href = 'login.html';
+    if (!CourseQSortAPI.isMockMode() && !CourseQSortAPI.isAuthenticated()) {
+        window.location.replace('index.html');
         return;
     }
     var name = sessionStorage.getItem('studentName') || '同学';
@@ -101,6 +94,33 @@ function formatTimeSlots(slots) {
     return parts.join('<br>') || '未知';
 }
 
+// 格式化分时段信息（显示周次范围 + 时间 + 教室）
+function formatSegments(segments) {
+    if (!segments || segments.length === 0) return '';
+    var weekNames = ['一', '二', '三', '四', '五'];
+    var html = '';
+    segments.forEach(function (seg) {
+        var weekStr = seg.week_start === seg.week_end ? '第' + seg.week_start + '周' : '第' + seg.week_start + '-' + seg.week_end + '周';
+        var dayMap = {};
+        (seg.time_slots || []).forEach(function (s) {
+            var d = s.day_of_week || s.day;
+            if (!dayMap[d]) dayMap[d] = [];
+            dayMap[d].push(s.period);
+        });
+        var parts = [];
+        for (var day = 1; day <= 5; day++) {
+            if (dayMap[day]) {
+                var periods = dayMap[day].sort(function (a, b) { return a - b; });
+                var start = periods[0], end = periods[periods.length - 1];
+                parts.push('周' + weekNames[day - 1] + ' ' + (start === end ? start + '节' : start + '-' + end + '节'));
+            }
+        }
+        var loc = seg.classroom ? ' <span class="text-muted">' + seg.classroom + '</span>' : '';
+        html += '<div class="segment-line small">' + weekStr + ' ' + parts.join(', ') + loc + '</div>';
+    });
+    return html;
+}
+
 // 计算某课程与已选课程的冲突详情
 function getConflictDetails(courseTimeSlots) {
     var conflicts = [];
@@ -131,6 +151,12 @@ async function initApp() {
     try {
         var scheduleData = await CourseQSortAPI.student.getSchedule();
         selectedCourses = scheduleData.courses || [];
+        console.log('[DEBUG] Schedule API 返回的课程数:', selectedCourses.length);
+        selectedCourses.forEach(function(c) {
+            if (c.segments && c.segments.length > 1) {
+                console.log('[DEBUG] 已选课程#' + c.course_id + ' "' + c.name + '" segments(' + c.segments.length + '个):', JSON.parse(JSON.stringify(c.segments)));
+            }
+        });
         sessionStorage.setItem('selectedCoursesData', JSON.stringify(selectedCourses));
 
         // 加载课程列表，如果失败则在内部处理
@@ -158,6 +184,9 @@ async function loadCoursePage(page) {
         totalCourseCount = data.count;
         currentPage = page;
         currentCourses = data.results || [];
+
+        // DEBUG: 检查后端返回的课程数及 segments
+        console.log('[DEBUG] CourseList API: count=' + data.count + ' results=' + currentCourses.length);
 
         var totalPages = Math.ceil(totalCourseCount / pageSize) || 1;
         paginationInfo.textContent = '第 ' + page + ' / ' + totalPages + ' 页 (共 ' + totalCourseCount + ' 门)';
@@ -202,19 +231,30 @@ function renderAll() {
 function renderCourseList(courses) {
     courseListTbody.innerHTML = '';
     courseCountBadge.textContent = '共 ' + totalCourseCount + ' 门';
+    courseCountBadge.className = 'badge me-2 ' + (totalCourseCount > 0 ? 'bg-light text-dark' : 'bg-secondary');
 
     if (!courses || courses.length === 0) {
         courseListTbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">暂无课程数据</td></tr>';
         return;
     }
 
+    // DEBUG: 打印每门课返回的 segments 数据
+    courses.forEach(function (course) {
+        if (course.segments && course.segments.length > 1) {
+            console.log('[DEBUG] 课程#' + course.course_id + ' "' + course.name + '" segments(' + course.segments.length + '个):', JSON.parse(JSON.stringify(course.segments)));
+        }
+    });
     courses.forEach(function (course) {
         var alreadySelected = selectedCourses.some(function (sc) {
             return sc.course_id === course.course_id;
         });
 
         var tr = document.createElement('tr');
-        tr.className = (course.conflict && !alreadySelected) ? 'conflict-row' : '';
+        if (alreadySelected) {
+            tr.className = 'table-success';
+        } else if (course.conflict) {
+            tr.className = 'conflict-row';
+        }
 
         var timeStr = formatTimeSlots(course.time_slots);
         var remaining = course.remaining_capacity !== undefined ? course.remaining_capacity :
@@ -223,25 +263,60 @@ function renderCourseList(courses) {
         var actionHtml = '';
         if (alreadySelected) {
             var isMandatory = selectedCourses.find(function (sc) { return sc.course_id === course.course_id; });
-            actionHtml = '<button class="btn btn-sm btn-secondary" disabled>' +
-                (isMandatory && isMandatory.mandatory ? '必修' : '已选') + '</button>';
+            if (isMandatory && isMandatory.mandatory) {
+                actionHtml = '<span class="badge badge-mandatory bg-warning text-dark"><i class="bi bi-lock-fill"></i> 必修</span>';
+            } else {
+                actionHtml = '<span class="badge bg-success"><i class="bi bi-check-lg"></i> 已选</span>';
+            }
         } else if (course.conflict) {
             var conflictInfo = getConflictDetails(course.time_slots);
-            actionHtml = '<button class="btn btn-sm btn-secondary" disabled>冲突</button>' +
-                ' <span class="badge bg-danger conflict-badge" data-course-id="' + course.course_id +
-                '" data-conflict-info=\'' + JSON.stringify(conflictInfo).replace(/'/g, "&#39;") + '\'>冲突</span>';
+            actionHtml = '<span class="badge bg-danger conflict-badge" data-course-id="' + course.course_id +
+                '" data-conflict-info=\'' + JSON.stringify(conflictInfo).replace(/'/g, "&#39;") + '\' style="cursor:pointer;">' +
+                '<i class="bi bi-exclamation-triangle-fill"></i> 冲突</span>';
         } else if (remaining <= 0) {
-            actionHtml = '<button class="btn btn-sm btn-secondary" disabled>已满</button>';
+            actionHtml = '<span class="badge bg-secondary"><i class="bi bi-x-circle"></i> 已满</span>';
         } else {
-            actionHtml = '<button class="btn btn-sm btn-primary select-btn" data-id="' + course.course_id + '">选课</button>';
+            actionHtml = '<button class="btn btn-sm btn-primary select-btn" data-id="' + course.course_id + '">' +
+                '<i class="bi bi-plus-circle"></i> 选课</button>';
         }
 
+        // 分类标签
+        var catTag = '';
+        var catClass = '';
+        if (course.category) {
+            switch (course.category) {
+                case '专必': catClass = 'cat-required'; break;
+                case '专选': catClass = 'cat-elective'; break;
+                case '通识': catClass = 'cat-general'; break;
+                case '体育': catClass = 'cat-pe'; break;
+                default: catClass = 'cat-professional';
+            }
+            catTag = '<span class="course-category-tag ' + catClass + '">' + course.category + '</span>';
+        }
+        // 学分样式
+        var creditClass = (course.credit || 0) >= 3 ? 'fw-bold text-primary' : '';
+        // 余量样式
+        var remaining = course.remaining_capacity !== undefined ? course.remaining_capacity :
+            (course.capacity - course.enrolled_count);
+        var capClass = remaining <= 0 ? 'text-danger fw-bold' :
+                       remaining <= 5 ? 'text-warning fw-bold' : 'text-success';
+        var capText = remaining <= 0 ? '已满' : (course.enrolled_count || 0) + '/' + (course.capacity || 0);
+
         tr.innerHTML =
-            '<td>' + (course.name || '') + '</td>' +
-            '<td>' + (course.credit || 0) + '</td>' +
+            '<td>' + (course.name || '') + catTag +
+                (course.mandatory ? '<span class="badge bg-warning text-dark ms-1" style="font-size:10px;"><i class="bi bi-lock-fill"></i></span>' : '') +
+            '</td>' +
+            '<td class="' + creditClass + '">' + (course.credit || 0) + '</td>' +
             '<td>' + (course.teacher || '') + '</td>' +
-            '<td>' + timeStr + '</td>' +
-            '<td>' + (course.enrolled_count || 0) + '/' + (course.capacity || 0) + '</td>' +
+            '<td class="small">' +
+                (function() {
+                    // 如果有 segments 就用，否则从 time_slots 构造默认段（第1-18周）
+                    var segs = (course.segments && course.segments.length > 0) ? course.segments :
+                        [{ week_start: 1, week_end: 18, time_slots: course.time_slots || [], classroom: course.classroom || '' }];
+                    return formatSegments(segs);
+                })() +
+            '</td>' +
+            '<td class="' + capClass + '">' + capText + '</td>' +
             '<td>' + actionHtml + '</td>';
         courseListTbody.appendChild(tr);
 
@@ -277,15 +352,16 @@ function renderSelectedCourses() {
     ul.className = 'list-group list-group-flush';
     selectedCourses.forEach(function (c) {
         var li = document.createElement('li');
-        li.className = 'list-group-item d-flex justify-content-between align-items-center p-1 small';
+        li.className = 'list-group-item d-flex justify-content-between align-items-center p-2 small' +
+            (c.mandatory ? ' mandatory-item' : '');
         var rightPart = '';
         if (c.mandatory) {
-            rightPart = '<span class="badge bg-warning text-dark">必修</span>';
+            rightPart = '<span class="badge badge-mandatory bg-warning text-dark"><i class="bi bi-lock-fill"></i> 必修</span>';
         } else {
-            rightPart = '<button class="btn btn-outline-danger btn-sm py-0 px-1 drop-btn" data-id="' + c.course_id + '">x</button>';
+            rightPart = '<button class="btn btn-outline-danger btn-sm py-0 px-1 drop-btn" data-id="' + c.course_id + '" title="退课"><i class="bi bi-x-lg"></i></button>';
         }
-        li.innerHTML = '<span>' + (c.name || '') + '</span>' +
-            '<span class="badge bg-secondary me-1">' + (c.credit || 0) + '学分</span>' +
+        li.innerHTML = '<div><span>' + (c.name || '') + '</span>' +
+            '<span class="badge credit-badge ms-1 ' + ((c.credit || 0) >= 3 ? 'bg-primary' : 'bg-secondary') + '">' + (c.credit || 0) + '学分</span></div>' +
             rightPart;
         ul.appendChild(li);
     });
@@ -350,7 +426,10 @@ function renderFreeSlots() {
 
 function updateTotalCredits() {
     var total = selectedCourses.reduce(function (sum, sc) { return sum + (sc.credit || 0); }, 0);
+    var ratio = total / maxCredits;
     totalCreditsSpan.textContent = total + ' / ' + maxCredits + ' 学分';
+    totalCreditsSpan.className = 'badge me-2 ' +
+        (ratio >= 1 ? 'bg-danger' : ratio >= 0.85 ? 'bg-warning text-dark' : 'bg-light text-dark');
 }
 
 // ======================== 交互操作 ========================
@@ -502,7 +581,7 @@ document.getElementById('logout-btn').addEventListener('click', function () {
     }
     CourseQSortAPI.token.clear();
     sessionStorage.clear();
-    window.location.href = 'login.html';
+    window.location.replace('index.html');
 });
 
 document.getElementById('print-btn').addEventListener('click', function () {

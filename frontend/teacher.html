@@ -7,7 +7,7 @@
     <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.bootcdn.net/ajax/libs/bootstrap-icons/1.10.0/font/bootstrap-icons.css" rel="stylesheet">
     <style>
-        :root { --cell-min-height: 74px; --time-width: 72px; }
+        :root { --cell-min-height: 82px; --time-width: 72px; }
         body { font-family: "Microsoft YaHei","PingFang SC",sans-serif; background: #f5f7fa; }
         .timetable-wrapper { overflow-x: auto; }
         .timetable { border-collapse: collapse; width: 100%; min-width: 780px; table-layout: fixed; }
@@ -20,10 +20,34 @@
         .course-block.professional { background: linear-gradient(135deg, #4f7cff, #3b5fd9); }
         .course-block.elective { background: linear-gradient(135deg, #f09b4a, #d4782c); }
         .course-block.general { background: linear-gradient(135deg, #4cb782, #369b63); }
+        .course-block.pe { background: linear-gradient(135deg, #e06070, #c43d50); }
         .course-block .c-name { font-weight: 600; font-size: 12px; }
         .course-block .c-info { font-size: 10px; opacity: .85; }
-        @media print { body { background: #fff; } #page-header { display: none; } }
+        .legend-item { display: inline-flex; align-items: center; gap: 6px; margin-right: 18px; font-size: 13px; }
+        .legend-dot { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
+        @media print {
+            @page { size: A4 landscape; margin: 8mm; }
+            body { background: #fff; }
+            #page-header, .legend-item { display: none; }
+            .card { border: none !important; box-shadow: none !important; }
+            .card-body { padding: 0 !important; }
+            .timetable { min-width: auto; }
+            .timetable thead { display: table-header-group; }
+            .timetable tr { page-break-inside: avoid; break-inside: avoid; }
+            .timetable td { height: auto; min-height: 38px; padding: 2px 3px; vertical-align: top; }
+            .course-block { font-size: 10px; }
+            .course-block .c-name { font-size: 10px; }
+            .course-block .c-info { font-size: 9px; }
+            .timetable .time-col { font-size: 10px; }
+            .timetable thead th { padding: 6px 0; font-size: 12px; }
+        }
     </style>
+    <script src="js/api.js"></script>
+    <script>
+        if (!CourseQSortAPI.isMockMode() && !CourseQSortAPI.isAuthenticated()) {
+            window.location.replace('index.html');
+        }
+    </script>
 </head>
 <body>
 
@@ -31,17 +55,32 @@
     <nav class="navbar navbar-light bg-white border-bottom shadow-sm">
         <div class="container">
             <a class="navbar-brand fw-bold" href="#"><i class="bi bi-person-badge me-2"></i>教师课表</a>
-            <div class="d-flex align-items-center gap-2">
-                <span class="navbar-text me-2" id="teacher-info-display"></span>
-                <span class="badge bg-secondary me-2" id="data-mode-badge">预览模式</span>
+            <div class="d-flex align-items-center gap-3">
+                <!-- 周导航 -->
+                <div class="btn-group btn-group-sm" id="week-nav">
+                    <button class="btn btn-outline-secondary" id="week-prev" title="上一周"><i class="bi bi-chevron-left"></i></button>
+                    <select class="btn btn-outline-secondary" id="week-select" style="width:auto;"></select>
+                    <button class="btn btn-outline-secondary" id="week-next" title="下一周"><i class="bi bi-chevron-right"></i></button>
+                </div>
+                <span class="badge bg-info" id="week-info"></span>
+                <span class="navbar-text me-2" id="teacher-name-display"></span>
+                <span class="badge bg-secondary" id="data-mode-badge">预览模式</span>
                 <button class="btn btn-outline-secondary btn-sm" onclick="window.print()"><i class="bi bi-printer"></i> 打印</button>
-                <button class="btn btn-outline-primary btn-sm" onclick="window.location.href='login.html'"><i class="bi bi-box-arrow-right"></i> 退出</button>
+                <button class="btn btn-outline-primary btn-sm" onclick="window.location.href='index.html'"><i class="bi bi-box-arrow-right"></i> 退出</button>
             </div>
         </div>
     </nav>
 </div>
 
 <div class="container my-4">
+    <!-- 图例 -->
+    <div class="d-flex flex-wrap align-items-center mb-3">
+        <span class="legend-item"><span class="legend-dot" style="background:#4f7cff;"></span> 专业课</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#f09b4a;"></span> 专业选修</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#4cb782;"></span> 通识课</span>
+        <span class="legend-item"><span class="legend-dot" style="background:#e06070;"></span> 体育课</span>
+    </div>
+
     <!-- 教师信息卡片 -->
     <div class="card shadow-sm mb-3">
         <div class="card-body py-2 d-flex align-items-center gap-4">
@@ -57,7 +96,7 @@
         </div>
     </div>
 
-    <!-- 加载 -->
+    <!-- 加载状态 -->
     <div id="loading-msg" class="text-center py-5 text-muted">
         <div class="spinner-border mb-2" style="width:2rem;height:2rem;"></div>
         <p>正在加载课表...</p>
@@ -73,148 +112,48 @@
         </div>
     </div>
 
+    <!-- 空状态 -->
     <div id="empty-msg" class="text-center py-5 text-muted" style="display:none;">
         <i class="bi bi-calendar-x" style="font-size:3rem;"></i>
         <p class="mt-2">该教师暂无排课数据</p>
     </div>
 </div>
 
-<script src="js/api.js"></script>
 <script>
 (function() {
-    // 登录守卫：JWT 模式检查 token，预览模式检查 sessionStorage
-    if (!CourseQSortAPI.isAuthenticated()) {
-        window.location.href = 'login.html';
-        return;
+    // 从 localStorage 读取课表框架配置
+    function loadTimetableConfig() {
+        var raw = localStorage.getItem('timetableConfig');
+        if (raw) {
+            try {
+                var tc = JSON.parse(raw);
+                if (tc && tc.periods && tc.periods.length > 0) return tc;
+            } catch(e) {}
+        }
+        return {periodsPerDay:11, totalWeeks:18, periods:[
+            {name:'第1节',start:'08:00',end:'08:45'},{name:'第2节',start:'08:55',end:'09:40'},
+            {name:'第3节',start:'10:00',end:'10:45'},{name:'第4节',start:'10:55',end:'11:40'},
+            {name:'第5节',start:'14:00',end:'14:45'},{name:'第6节',start:'14:55',end:'15:40'},
+            {name:'第7节',start:'16:00',end:'16:45'},{name:'第8节',start:'16:55',end:'17:40'},
+            {name:'第9节',start:'19:00',end:'19:45'},{name:'第10节',start:'19:55',end:'20:40'},
+            {name:'第11节',start:'20:50',end:'21:35'}
+        ]};
     }
-    var PERIOD_NAMES = ['','第1节','第2节','第3节','第4节','第5节','第6节','第7节','第8节','第9节','第10节','第11节'];
-    var PERIOD_MAP = {1:'08:00-08:45',2:'08:55-09:40',3:'10:00-10:45',4:'10:55-11:40',5:'12:00-13:30',6:'14:00-14:45',7:'14:55-15:40',8:'16:00-16:45',9:'16:55-17:40',10:'19:00-19:45',11:'19:55-20:40'};
+    var TC = loadTimetableConfig();
+    var PERIODS = TC.periods;
+    var PERIOD_COUNT = PERIODS.length;
 
     var teacherId = sessionStorage.getItem('teacherId') || '';
     var teacherName = sessionStorage.getItem('teacherName') || '教师';
     var teacherDept = sessionStorage.getItem('teacherDept') || '';
 
-    document.getElementById('teacher-name').textContent = teacherName || '未指定教师';
-    document.getElementById('teacher-meta').textContent = '编号: ' + (teacherId || '—') + ' | 学院: ' + (teacherDept || '—');
+    function updateTeacherDisplay(name, dept, id) {
+        document.getElementById('teacher-name').textContent = name || '未指定教师';
+        document.getElementById('teacher-meta').textContent = '工号: ' + (id || teacherId || '—') + ' | 学院: ' + (dept || '—');
+        document.getElementById('teacher-name-display').textContent = name || '';
+    }
+    updateTeacherDisplay(teacherName, teacherDept, teacherId);
     document.getElementById('data-mode-badge').textContent = CourseQSortAPI.isMockMode() ? '预览模式' : '后端模式';
-
-    var loadingEl = document.getElementById('loading-msg');
-    var cardEl = document.getElementById('timetable-card');
-    var emptyEl = document.getElementById('empty-msg');
-    var tbody = document.getElementById('timetable-body');
-
-    function getCategoryClass(c) {
-        var name = (c.name || '').toLowerCase();
-        if (name.indexOf('体育') !== -1) return 'pe';
-        if (c.is_professional_course || c.is_professional) return 'professional';
-        return 'general';
-    }
-
-    function renderGrid(courses) {
-        if (!courses || courses.length === 0) {
-            loadingEl.style.display = 'none'; emptyEl.style.display = 'block'; return;
-        }
-
-        var grid = new Array(6);
-        for (var d = 1; d <= 5; d++) { grid[d] = new Array(12); for (var p = 1; p <= 11; p++) grid[d][p] = []; }
-
-        courses.forEach(function(c) {
-            var slots = c.time_slots || [];
-            slots.forEach(function(s) {
-                var d = s.day_of_week || s.day || 1;
-                var p = s.period;
-                if (d >= 1 && d <= 5 && p >= 1 && p <= 11) {
-                    grid[d][p].push({
-                        name: c.name || '', teacher: c.teacher || '',
-                        classroom: c.classroom || '',
-                        credit: c.credit, is_professional: c.is_professional_course || c.is_professional,
-                        studentCount: c.expected_student_count || c.enrolled_count || ''
-                    });
-                }
-            });
-        });
-
-        var html = '';
-        for (var p = 1; p <= 11; p++) {
-            var timeLabel = PERIOD_NAMES[p] + '<br><small class="text-muted" style="font-size:10px;">' + (PERIOD_MAP[p] || '') + '</small>';
-            html += '<tr><td class="time-col">' + timeLabel + '</td>';
-            for (var d = 1; d <= 5; d++) {
-                html += '<td>';
-                grid[d][p].forEach(function(c) {
-                    var cls = 'course-block ' + getCategoryClass(c);
-                    html += '<div class="' + cls + '" title="课程: ' + c.name + '&#10;教室: ' + (c.classroom || '未定') + '&#10;学生数: ' + (c.studentCount || '—') + '">';
-                    html += '<div class="c-name">' + c.name + '</div>';
-                    if (c.classroom) html += '<div class="c-info">📍 ' + c.classroom + '</div>';
-                    if (c.studentCount) html += '<div class="c-info">👥 ' + c.studentCount + ' 人</div>';
-                    html += '</div>';
-                });
-                html += '</td>';
-            }
-            html += '</tr>';
-        }
-        tbody.innerHTML = html;
-
-        var totalHours = courses.reduce(function(sum, c) { return sum + (c.time_slots ? c.time_slots.length : 0); }, 0);
-        document.getElementById('course-count').textContent = courses.length + ' 门课';
-        document.getElementById('hour-count').textContent = totalHours + ' 学时/周';
-
-        loadingEl.style.display = 'none'; cardEl.style.display = 'block';
-    }
-
-    // ---- 加载教师课程 ----
-    function loadTeacherCourses() {
-        if (CourseQSortAPI.isMockMode()) {
-            // Mock 模式：从本地数据按教师姓名匹配
-            var allCourses = CourseQSortAPI._getMockCourseList({page_size: 200});
-            var results = allCourses.results || [];
-            // 按教师姓名匹配
-            var teacherCourses = results.filter(function(c) {
-                return c.teacher === teacherName;
-            });
-            // 如果需要更精确匹配（按 teacherId）
-            if (teacherCourses.length === 0 && teacherId) {
-                // fallback: 用一个简单的映射
-                var MOCK_TEACHER_NAMES = {1:'张教授',2:'李老师',3:'王教授',4:'赵教授',5:'陈老师'};
-                var nameFromId = MOCK_TEACHER_NAMES[teacherId];
-                if (nameFromId) {
-                    teacherCourses = results.filter(function(c) { return c.teacher === nameFromId; });
-                }
-            }
-            renderGrid(teacherCourses);
-        } else {
-            // 后端模式：调 API
-            fetch(CourseQSortAPI.getBaseUrl() + '/admin/teachers/' + teacherId + '/', {
-                headers: { 'Authorization': 'Bearer ' + CourseQSortAPI.token.getAccess() }
-            })
-            .then(function(r) { return r.json(); })
-            .then(function(teacher) {
-                document.getElementById('teacher-name').textContent = teacher.name || teacherName;
-                document.getElementById('teacher-meta').textContent = '工号: ' + (teacher.employee_no || '—') + ' | 学院: ' + (teacher.department || '—');
-                // 再获取该教师的课程
-                return fetch(CourseQSortAPI.getBaseUrl() + '/admin/courses/?teacher=' + teacherId, {
-                    headers: { 'Authorization': 'Bearer ' + CourseQSortAPI.token.getAccess() }
-                });
-            })
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                var courses = (data.results || []).map(function(c) {
-                    return {
-                        name: c.name, credit: c.credit,
-                        is_professional_course: c.is_professional_course,
-                        expected_student_count: c.expected_student_count,
-                        time_slots: c.schedule_items ? c.schedule_items.map(function(si) {
-                            return { day_of_week: si.day_of_week, period: si.period };
-                        }) : [],
-                        classroom: c.schedule_items && c.schedule_items[0] ? c.schedule_items[0].classroom_name : ''
-                    };
-                });
-                renderGrid(courses);
-            })
-            .catch(function() {
-                loadingEl.innerHTML = '<p class="text-danger">加载失败，请确认后端服务已启动</p>';
-            });
-        }
-    }
 
     // 如果没有选择教师，尝试从 URL 参数获取
     if (!teacherId && !teacherName) {
@@ -225,11 +164,185 @@
         if (teacherName) sessionStorage.setItem('teacherName', teacherName);
     }
 
-    if (!teacherId && !teacherName) {
-        loadingEl.innerHTML = '<p class="text-warning">未指定教师，请从登录页选择教师后进入</p>';
-    } else {
-        loadTeacherCourses();
+    var curWeek = 1;
+    var maxWeek = TC.totalWeeks || 18;
+    var allCourses = [];  // [{name, credit, is_professional_course, time_slots: [{day_of_week, period, week_start, week_end, classroom}]}]
+
+    var loadingEl = document.getElementById('loading-msg');
+    var cardEl = document.getElementById('timetable-card');
+    var emptyEl = document.getElementById('empty-msg');
+    var tbody = document.getElementById('timetable-body');
+    var weekSelect = document.getElementById('week-select');
+    var weekInfo = document.getElementById('week-info');
+
+    function getCategoryClass(c) {
+        var name = (c.name || '').toLowerCase();
+        var isPro = c.is_professional_course || c.is_professional;
+        if (name.indexOf('体育') !== -1 || name.indexOf('运动') !== -1) return 'pe';
+        if (isPro === true) return 'professional';
+        if (isPro === false) return 'elective';
+        return 'professional';
     }
+
+    function buildWeekSelector() {
+        weekSelect.innerHTML = '';
+        for (var w = 1; w <= maxWeek; w++) {
+            var opt = document.createElement('option');
+            opt.value = w;
+            opt.textContent = '第' + w + '周';
+            if (w === curWeek) opt.selected = true;
+            weekSelect.appendChild(opt);
+        }
+    }
+
+    function renderGrid() {
+        console.log('[teacher] renderGrid start, curWeek=', curWeek, 'allCourses.length=', allCourses.length);
+        // 展开所有课程的 time_slots，过滤当前周
+        var weekSlots = [];  // [{day_of_week, period, name, classroom, credit, is_professional_course}]
+        allCourses.forEach(function(c) {
+            (c.time_slots || []).forEach(function(s) {
+                var ws = s.week_start || 1;
+                var we = s.week_end || maxWeek;
+                if (curWeek >= ws && curWeek <= we) {
+                    weekSlots.push({
+                        day_of_week: s.day_of_week || s.day || 1,
+                        period: s.period,
+                        name: c.name,
+                        classroom: s.classroom || '',
+                        credit: c.credit,
+                        is_professional_course: c.is_professional_course || c.is_professional
+                    });
+                }
+            });
+        });
+
+        console.log('[teacher] weekSlots.length=', weekSlots.length);
+        if (weekSlots.length === 0) {
+            console.log('[teacher] 当前周无课程，显示空状态');
+            cardEl.style.display = 'none';
+            emptyEl.style.display = 'block';
+            loadingEl.style.display = 'none';
+            emptyEl.innerHTML = '<i class="bi bi-calendar-x" style="font-size:3rem;"></i><p class="mt-2">第 ' + curWeek + ' 周暂无课程</p>';
+            weekInfo.textContent = '第 ' + curWeek + ' 周 · 0 课时';
+            return;
+        }
+
+        // 5天 × PERIOD_COUNT 节
+        var grid = new Array(6);
+        for (var d = 1; d <= 5; d++) {
+            grid[d] = new Array(PERIOD_COUNT + 1);
+            for (var p = 1; p <= PERIOD_COUNT; p++) {
+                grid[d][p] = [];
+            }
+        }
+
+        weekSlots.forEach(function(s) {
+            var d = s.day_of_week;
+            var p = s.period;
+            if (d >= 1 && d <= 5 && p >= 1 && p <= PERIOD_COUNT) {
+                // 同一课程同一天同一时段去重
+                var exists = grid[d][p].some(function(x) { return x.name === s.name; });
+                if (!exists) {
+                    grid[d][p].push(s);
+                }
+            }
+        });
+
+        var html = '';
+        for (var p = 1; p <= PERIOD_COUNT; p++) {
+            var pd = PERIODS[p - 1];
+            var timeLabel = pd.name + '<br><small class="text-muted" style="font-size:10px;">' + pd.start + ' - ' + pd.end + '</small>';
+            html += '<tr><td class="time-col">' + timeLabel + '</td>';
+            for (var d = 1; d <= 5; d++) {
+                var cells = grid[d][p];
+                html += '<td>';
+                cells.forEach(function(c) {
+                    var cls = 'course-block ' + getCategoryClass(c);
+                    html += '<div class="' + cls + '" title="' + c.name + '&#10;教室: ' + (c.classroom || '未定') + '">';
+                    html += '<div class="c-name">' + c.name + '</div>';
+                    if (c.classroom) html += '<div class="c-info">📍 ' + c.classroom + '</div>';
+                    html += '</div>';
+                });
+                html += '</td>';
+            }
+            html += '</tr>';
+        }
+        tbody.innerHTML = html;
+        console.log('[teacher] 表格已渲染, rows=', html.split('</tr>').length - 1);
+
+        // 统计
+        var totalSlots = weekSlots.length;
+        var uniqueCourses = {};
+        weekSlots.forEach(function(s) { uniqueCourses[s.name] = true; });
+        document.getElementById('course-count').textContent = Object.keys(uniqueCourses).length + ' 门课';
+        document.getElementById('hour-count').textContent = totalSlots + ' 学时/周';
+
+        loadingEl.style.display = 'none';
+        cardEl.style.display = 'block';
+        emptyEl.style.display = 'none';
+        console.log('[teacher] renderGrid 完成, loading隐藏, card显示, 课程数=', Object.keys(uniqueCourses).length, '课时数=', totalSlots);
+        weekInfo.textContent = '第 ' + curWeek + ' 周 · ' + totalSlots + ' 课时';
+    }
+
+    function goWeek(w) {
+        if (w < 1 || w > maxWeek) return;
+        curWeek = w;
+        weekSelect.value = w;
+        renderGrid();
+    }
+
+    document.getElementById('week-prev').addEventListener('click', function() { goWeek(curWeek - 1); });
+    document.getElementById('week-next').addEventListener('click', function() { goWeek(curWeek + 1); });
+    weekSelect.addEventListener('change', function() { goWeek(parseInt(this.value)); });
+
+    // ---- 加载教师课表 ----
+    function loadTeacherCourses() {
+        console.log('[teacher] loadTeacherCourses start, teacherId=', teacherId, 'teacherName=', teacherName, 'teacherDept=', teacherDept);
+        console.log('[teacher] isMockMode=', CourseQSortAPI.isMockMode(), 'getLoginMode=', CourseQSortAPI.getLoginMode());
+        console.log('[teacher] hasAccessToken=', !!CourseQSortAPI.token.getAccess());
+
+        if (!teacherId && !teacherName) {
+            console.warn('[teacher] 无 teacherId 和 teacherName，停止加载');
+            loadingEl.innerHTML = '<p class="text-warning">未指定教师，请从登录页选择教师后进入</p>';
+            return;
+        }
+
+        console.log('[teacher] 开始调用 API: teacher.getSchedule, teacherId=', teacherId);
+        // 统一走 apiCall，mock 和后端模式自动路由
+        CourseQSortAPI.teacher.getSchedule(teacherId || null)
+            .then(function(data) {
+                console.log('[teacher] API 返回成功, data=', data);
+                if (!data) { throw new Error('无数据'); }
+                if (data.teacher) {
+                    console.log('[teacher] 教师信息:', data.teacher);
+                    teacherName = data.teacher.name || teacherName;
+                    teacherDept = data.teacher.department || teacherDept;
+                    updateTeacherDisplay(teacherName, teacherDept, data.teacher.employee_no || teacherId);
+                }
+                allCourses = (data.courses || []);
+                console.log('[teacher] 课程数:', allCourses.length, 'allCourses=', allCourses);
+
+                // 计算最大周数
+                var maxW = TC.totalWeeks || 18;
+                allCourses.forEach(function(c) {
+                    (c.time_slots || []).forEach(function(s) {
+                        if (s.week_end && s.week_end > maxW) maxW = s.week_end;
+                    });
+                });
+                maxWeek = maxW;
+                console.log('[teacher] maxWeek=', maxWeek, 'curWeek=', curWeek);
+                console.log('[teacher] 开始构建周选择器和渲染课表...');
+                buildWeekSelector();
+                goWeek(curWeek);
+                console.log('[teacher] 渲染完成');
+            })
+            .catch(function(err) {
+                console.error('[teacher] API 失败:', err.name, err.message, 'status=', err.status, 'data=', err.data);
+                loadingEl.innerHTML = '<p class="text-danger">加载失败: ' + (err.message || '请确认已发布排课方案') + '</p>';
+            });
+    }
+
+    loadTeacherCourses();
 })();
 </script>
 </body>

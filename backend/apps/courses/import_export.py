@@ -1,115 +1,391 @@
-import uuid
+import json
+import re
+from collections import OrderedDict
 
-import openpyxl
+from django.db import transaction
 
-from apps.courses.models import Course, Major, Teacher
+from apps.courses.models import Classroom, Course, CourseScheduleItem, Major, Teacher
+
+# ── 常量 ──────────────────────────────────────────────────
+
+DAY_MAP = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "日": 7}
+CAMPUS_KEYWORDS = {"北校园", "东校园", "南校园", "珠海校区", "深圳校区"}
+ACTIVITY_KEYWORDS = {"理论环节", "实验实践环节", "实验环节", "实践环节", "上机环节", "考试环节"}
 
 
-def import_courses_from_excel(file):
-    wb = openpyxl.load_workbook(file, read_only=True)
-    ws = wb.active
-    rows = list(ws.iter_rows(values_only=True))
-    if not rows:
-        return {"imported_count": 0, "errors": []}
+# ── JSON 读取 ─────────────────────────────────────────────
 
-    headers = [str(h).strip().lower() if h else "" for h in rows[0]]
-    errors = []
-    imported = 0
 
-    col_map = {}
-    for kw, names in [
-        ("name", ["课程名称", "name", "course name", "coursename"]),
-        ("code", ["课程编码", "课程编号", "code", "course num", "coursenum"]),
-        ("credit", ["学分", "credit", "score"]),
-        ("hours", ["学时", "hours"]),
-        ("semester", ["学期", "semester", "year term", "yearterm"]),
-        ("major", ["专业", "major", "专业名称"]),
-        ("teacher", ["教师", "teacher", "授课教师", "teachingname", "teaching name"]),
-        ("classroom_type", ["教室类型", "classroom type", "required classroom types"]),
-        (
-            "student_count",
-            ["人数", "学生人数", "expected student count", "expected_student_count", "limitnumber", "limit number"],
-        ),
-        (
-            "is_professional",
-            ["专业课", "is professional", "is_professional_course", "course category", "coursecategoryname"],
-        ),
-    ]:
-        for i, h in enumerate(headers):
-            if h in names:
-                col_map[kw] = i
-                break
+def _load_json_data(file):
+    """从上传文件或文件路径读取 JSON 数据，返回 records 列表。"""
+    if hasattr(file, "read"):
+        raw = file.read()
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        data = json.loads(raw)
+    else:
+        with open(str(file), "r", encoding="utf-8") as f:
+            data = json.load(f)
 
-    for row_idx, row in enumerate(rows[1:], start=2):
-        if not any(row):
+    if isinstance(data, list):
+        records = []
+        for item in data:
+            if isinstance(item, dict) and "rows" in item:
+                records.extend(item["rows"])
+            else:
+                records.append(item)
+        return records
+    if isinstance(data, dict) and "rows" in data:
+        return data["rows"]
+    return data
+
+
+# ── teachingTimePlaceStr 解析 ──────────────────────────────
+
+
+def _parse_teaching_time_place_str(t_str):
+    """
+    格式（以 / 分割）：
+      4 段: week/day/period/activity_type
+      5 段: week/day/period/location/activity_type
+      6 段: week/day/period/location/teacher/activity_type
+    """
+    items = []
+    for segment in t_str.rstrip(",").split(","):
+        segment = segment.strip()
+        if not segment:
             continue
+        parts = segment.split("/")
+        if len(parts) < 4:
+            continue
+
+        week_part = parts[0].strip()
+        day_part = parts[1].strip()
+        period_part = parts[2].strip()
+
+        if len(parts) >= 6:
+            location = parts[3].strip()
+            teacher_name = parts[4].strip()
+            activity_type = parts[5].strip()
+        elif len(parts) == 5:
+            location = parts[3].strip()
+            teacher_name = ""
+            activity_type = parts[4].strip()
+        else:
+            location = ""
+            teacher_name = ""
+            activity_type = parts[3].strip()
+
+        week_str = re.sub(r"[^0-9\-]", "", week_part).strip()
+        if "-" in week_str:
+            w_start, w_end = week_str.split("-", 1)
+        else:
+            w_start = w_end = week_str
+
+        day_str = re.sub(r"^星期", "", day_part)
+        day_of_week = DAY_MAP.get(day_str, 0)
+
+        period_str = re.sub(r"[^0-9\-]", "", period_part)
         try:
-            name = str(row[col_map.get("name", 0)] or "").strip() if "name" in col_map else ""
-            if not name:
-                errors.append({"row": row_idx, "reason": "课程名称为空"})
+            period = int(period_str.split("-")[0].strip())
+        except ValueError:
+            continue
+
+        building, room_name = _parse_location(location)
+
+        items.append(
+            {
+                "week_start": int(w_start),
+                "week_end": int(w_end),
+                "day_of_week": day_of_week,
+                "period": period,
+                "building": building,
+                "classroom_name": room_name,
+                "teacher_name": teacher_name,
+                "activity_type": activity_type,
+            }
+        )
+    return items
+
+
+def _parse_location(location_str):
+    if not location_str or location_str in ACTIVITY_KEYWORDS:
+        return "", ""
+    parts = location_str.split("-")
+    if len(parts) <= 1:
+        return location_str, location_str
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    campus = parts[0]
+    building = "-".join(parts[1:-1])
+    room = parts[-1]
+    full_building = f"{campus}-{building}" if campus else building
+    return full_building, room
+
+
+# ── readObj 解析 ───────────────────────────────────────────
+
+
+def _parse_read_obj(read_obj, department_default=""):
+    groups = []
+    for part in read_obj.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        tokens = part.split()
+        if tokens and tokens[0] in CAMPUS_KEYWORDS:
+            tokens = tokens[1:]
+        rest = " ".join(tokens)
+
+        m = re.search(r"(\d{4}级)", rest)
+        if not m:
+            continue
+
+        department = rest[: m.start()].strip() or department_default
+        grade_info = rest[m.start() :]
+        grade_tokens = re.split(r"\s+", grade_info.strip())
+
+        grade = grade_tokens[0] if grade_tokens else ""
+        major_name = ""
+        class_name = ""
+
+        for t in grade_tokens[1:]:
+            cleaned = re.sub(r"^\d{2}级", "", t).strip()
+            if not cleaned:
                 continue
+            if re.search(r"[\d一二三四五六七八九十]", cleaned):
+                class_name = cleaned
+            elif not major_name:
+                major_name = cleaned
 
-            code = str(row[col_map.get("code", 0)] or "").strip() if "code" in col_map else ""
-            semester = str(row[col_map.get("semester", 0)] or "").strip() if "semester" in col_map else ""
-            credit_str = str(row[col_map.get("credit", 0)] or "0").strip() if "credit" in col_map else "0"
+        if not major_name:
+            major_name = department.split("（")[0]
 
-            try:
-                credit = float(credit_str)
-            except ValueError:
-                errors.append({"row": row_idx, "reason": "学分格式错误"})
-                continue
+        groups.append(
+            {
+                "department": department,
+                "grade": grade,
+                "major_name": major_name,
+                "class_name": class_name,
+            }
+        )
+    return groups
 
-            hours = None
-            if "hours" in col_map:
-                try:
-                    hours = int(float(str(row[col_map["hours"]] or "0")))
-                except ValueError:
-                    pass
 
-            major = None
-            if "major" in col_map:
-                major_name = str(row[col_map["major"]] or "").strip()
-                if major_name:
-                    major = Major.objects.filter(name=major_name).first()
+# ── 校区提取 ───────────────────────────────────────────────
 
-            category_str = ""
-            if "is_professional" in col_map:
-                category_str = str(row[col_map["is_professional"]] or "").strip().lower()
-            is_professional = category_str in ("专必", "专选", "true", "1", "yes")
 
-            count = None
-            if "student_count" in col_map:
-                try:
-                    count = int(float(str(row[col_map["student_count"]] or "0")))
-                except ValueError:
-                    pass
+def _extract_campus_from_record(record):
+    return record.get("openingSchoolName", "").strip()
 
-            teacher_names = []
-            if "teacher" in col_map:
-                raw_teacher = str(row[col_map["teacher"]] or "").strip()
-                if raw_teacher:
-                    normalized = raw_teacher.replace("，", ",").replace("、", ",").replace(";", ",").replace("|", ",")
-                    teacher_names = [part.strip() for part in normalized.split(",") if part.strip()]
 
-            course = Course.objects.create(
-                name=name,
-                code=code,
-                credit=credit,
-                hours=hours,
-                semester=semester,
-                major=major,
-                is_professional_course=is_professional,
-                expected_student_count=count,
-                course_id_from_source=(f'import-{code or "course"}-{row_idx}-{uuid.uuid4().hex[:8]}'),
-            )
-            if teacher_names:
-                teachers = []
-                for teacher_name in teacher_names:
-                    teacher, _ = Teacher.objects.get_or_create(name=teacher_name)
-                    teachers.append(teacher)
-                course.teachers.set(teachers)
-            imported += 1
-        except Exception as e:
-            errors.append({"row": row_idx, "reason": str(e)})
+# ── 扫描提取实体 ───────────────────────────────────────────
 
-    return {"imported_count": imported, "errors": errors}
+
+def _extract_entities(records, semester_override=None, session_length=None):
+    majors = OrderedDict()
+    teachers = OrderedDict()
+    classrooms = OrderedDict()
+    courses = OrderedDict()
+    all_schedule_items = []
+
+    for record in records:
+        semester = semester_override or record.get("yearTerm", "")
+        course_id_source = str(record.get("courseId", ""))
+        course_name = record.get("courseName", "").strip()
+        course_code = record.get("courseNum", "").strip()
+        try:
+            credit = float(record.get("score", 0) or 0)
+        except (ValueError, TypeError):
+            credit = 0.0
+        department = record.get("openingUnitName", "").strip()
+        category = record.get("courseCategoryName", "").strip()
+        try:
+            limit = int(record.get("limitNumber")) if record.get("limitNumber") else None
+        except (ValueError, TypeError):
+            limit = None
+        campus = _extract_campus_from_record(record)
+
+        teacher_names = [t.strip() for t in record.get("teachingName", "").split(",") if t.strip()]
+
+        is_professional = category in ("专必", "专选")
+
+        read_obj = record.get("readObj", "")
+        parsed_groups = _parse_read_obj(read_obj, department)
+
+        for g in parsed_groups:
+            major_key = (g["major_name"], department)
+            if major_key not in majors:
+                majors[major_key] = g["major_name"]
+
+        for tn in teacher_names:
+            if tn not in teachers:
+                teachers[tn] = {"name": tn, "department": department}
+
+        if course_id_source and course_id_source not in courses:
+            major_name = parsed_groups[0]["major_name"] if parsed_groups else department.split("（")[0]
+            courses[course_id_source] = {
+                "name": course_name,
+                "code": course_code,
+                "credit": credit,
+                "semester": semester,
+                "campus": campus,
+                "teacher_names": set(),
+                "is_professional": is_professional,
+                "expected_student_count": limit,
+                "department": department,
+                "major_name": major_name,
+                "course_id_from_source": course_id_source,
+                "session_length": session_length,
+            }
+        if course_id_source:
+            courses[course_id_source]["teacher_names"].update(teacher_names)
+
+        t_str = record.get("teachingTimePlaceStr", "")
+        items = _parse_teaching_time_place_str(t_str)
+        for item in items:
+            item["course_id_source"] = course_id_source
+            item["semester"] = semester
+            item["department"] = department
+            item["campus"] = campus
+
+            ck = (item["building"], item["classroom_name"])
+            if ck not in classrooms and item["building"]:
+                classrooms[ck] = {
+                    "building": item["building"],
+                    "name": item["classroom_name"],
+                    "is_lab": ("实验中心" in item["building"] or "实验室" in item["classroom_name"]),
+                    "campus": item.get("campus", ""),
+                }
+
+            if item["teacher_name"] and item["teacher_name"] not in teachers:
+                teachers[item["teacher_name"]] = {
+                    "name": item["teacher_name"],
+                    "department": department,
+                }
+                if course_id_source in courses:
+                    courses[course_id_source]["teacher_names"].add(item["teacher_name"])
+
+            all_schedule_items.append(item)
+
+    return {
+        "majors": majors,
+        "teachers": teachers,
+        "classrooms": classrooms,
+        "courses": courses,
+        "schedule_items": all_schedule_items,
+        "course_count": len(courses),
+        "teacher_count": len(teachers),
+        "classroom_count": len(classrooms),
+        "schedule_count": len(all_schedule_items),
+    }
+
+
+# ── 写入数据库 ─────────────────────────────────────────────
+
+
+def _persist_entities(entities):
+    major_objects = {}
+    for name, department in entities["majors"]:
+        obj, _ = Major.objects.get_or_create(name=name)
+        major_objects[(name, department)] = obj
+
+    teacher_objects = {}
+    for name, data in entities["teachers"].items():
+        obj, _ = Teacher.objects.get_or_create(name=name, defaults={"department": data["department"]})
+        if data["department"] and not obj.department:
+            obj.department = data["department"]
+            obj.save(update_fields=["department"])
+        teacher_objects[name] = obj
+
+    classroom_objects = {}
+    for (building, name), data in entities["classrooms"].items():
+        obj, _ = Classroom.objects.get_or_create(
+            building=data["building"], name=data["name"], defaults={"is_lab": data["is_lab"]}
+        )
+        classroom_objects[(building, name)] = obj
+
+    course_objects = {}
+    for cid, data in entities["courses"].items():
+        major_key = (data["major_name"], data["department"])
+        major = major_objects.get(major_key)
+        defaults = {
+            "name": data["name"],
+            "code": data["code"],
+            "credit": data["credit"],
+            "semester": data["semester"],
+            "campus": data["campus"],
+            "major": major,
+            "is_professional_course": data["is_professional"],
+            "expected_student_count": data["expected_student_count"],
+        }
+        if data.get("session_length") is not None:
+            defaults["session_length"] = data["session_length"]
+        course, created = Course.objects.get_or_create(
+            course_id_from_source=cid,
+            defaults=defaults,
+        )
+        if not created and data.get("session_length") is not None:
+            # 更新已存在课程的连排节数
+            course.session_length = data["session_length"]
+            course.save(update_fields=["session_length"])
+        if created:
+            for tn in data["teacher_names"]:
+                teacher = teacher_objects.get(tn)
+                if teacher:
+                    course.teachers.add(teacher)
+        course_objects[cid] = course
+
+    created_items = 0
+    for item in entities["schedule_items"]:
+        course = course_objects.get(item["course_id_source"])
+        if not course:
+            continue
+        teacher = teacher_objects.get(item["teacher_name"])
+        ck = (item["building"], item["classroom_name"])
+        classroom = classroom_objects.get(ck)
+
+        CourseScheduleItem.objects.create(
+            course=course,
+            teacher=teacher,
+            classroom=classroom,
+            day_of_week=item["day_of_week"],
+            period=item["period"],
+            week_start=item["week_start"],
+            week_end=item["week_end"],
+        )
+        created_items += 1
+
+    return {
+        "major_count": len(major_objects),
+        "teacher_count": len(teacher_objects),
+        "classroom_count": len(classroom_objects),
+        "course_count": len(course_objects),
+        "schedule_count": created_items,
+    }
+
+
+# ── 公开 API ──────────────────────────────────────────────
+
+
+def import_courses_from_json(file, session_length=None):
+    """从 JSON 文件导入课程数据（test_100.json 格式）。
+
+    session_length: 默认连排节数，JSON 中所有课程统一设置为此值。
+    """
+    records = _load_json_data(file)
+    entities = _extract_entities(records, session_length=session_length)
+
+    with transaction.atomic():
+        stats = _persist_entities(entities)
+
+    return {
+        "imported_count": stats["course_count"],
+        "total_records": len(records),
+        "majors": stats["major_count"],
+        "teachers": stats["teacher_count"],
+        "classrooms": stats["classroom_count"],
+        "courses": stats["course_count"],
+        "schedule_items": stats["schedule_count"],
+        "errors": [],
+    }

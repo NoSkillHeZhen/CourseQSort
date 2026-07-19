@@ -61,6 +61,10 @@ def run_generate_sync(task_id):
         )
 
     except Exception as e:
+        import traceback
+
+        tb = traceback.format_exc()
+        print("[SCHEDULING ERROR] task_id=" + task_id + "\n" + tb)
         task.status = "FAILED"
-        task.error_message = str(e)
+        task.error_message = str(e) + "\n---\n" + tb.split("\n")[-3]
         task.save(update_fields=["status", "error_message"])

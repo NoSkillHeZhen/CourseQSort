@@ -15,6 +15,22 @@ class Major(models.Model):
         return self.name
 
 
+class ClassGroup(models.Model):
+    """班级，归属于某个专业"""
+
+    name = models.CharField(max_length=100, verbose_name="班级名称")
+    major = models.ForeignKey(Major, on_delete=models.CASCADE, related_name="classes", verbose_name="所属专业")
+    grade = models.CharField(max_length=20, blank=True, default="", verbose_name="年级")
+
+    class Meta:
+        db_table = "class_group"
+        unique_together = [("name", "major")]
+        ordering = ["major", "grade", "name"]
+
+    def __str__(self):
+        return f"{self.name}（{self.major.name}）"
+
+
 class Teacher(models.Model):
     user = models.OneToOneField(
         User, on_delete=models.SET_NULL, null=True, blank=True, related_name="teacher_profile", verbose_name="绑定用户"
@@ -99,6 +115,9 @@ class Student(models.Model):
     major = models.ForeignKey(Major, on_delete=models.SET_NULL, null=True, blank=True)
     grade = models.CharField(max_length=20, blank=True, default="")
     class_identification = models.CharField(max_length=200, blank=True, default="")
+    class_group = models.ForeignKey(
+        ClassGroup, on_delete=models.SET_NULL, null=True, blank=True, related_name="students", verbose_name="所属班级"
+    )
 
     class Meta:
         db_table = "student"
@@ -106,3 +125,33 @@ class Student(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.student_no})"
+
+
+class CourseAssignment(models.Model):
+    """必修课分配规则：按专业/年级/班级将课程标记为必修"""
+
+    course = models.ForeignKey(Course, on_delete=models.CASCADE, related_name="assignments")
+    major = models.ForeignKey(
+        Major, on_delete=models.CASCADE, null=True, blank=True, help_text="目标专业（为空表示不限专业）"
+    )
+    grade = models.CharField(max_length=20, blank=True, default="", help_text="目标年级，如 2024（为空表示不限年级）")
+    class_identification = models.CharField(
+        max_length=200, blank=True, default="", help_text="目标班级，如 计科2401（为空表示不限班级）"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "course_assignment"
+        unique_together = [("course", "major", "grade", "class_identification")]
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        parts = []
+        if self.major:
+            parts.append(self.major.name)
+        if self.grade:
+            parts.append(self.grade + "级")
+        if self.class_identification:
+            parts.append(self.class_identification)
+        target = "/".join(parts) if parts else "全部"
+        return f"{self.course.name} → {target}（必修）"

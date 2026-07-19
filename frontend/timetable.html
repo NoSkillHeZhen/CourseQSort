@@ -31,11 +31,27 @@
         .legend-item { display: inline-flex; align-items: center; gap: 6px; margin-right: 18px; font-size: 13px; }
         .legend-dot { width: 12px; height: 12px; border-radius: 3px; flex-shrink: 0; }
         @media print {
+            @page { size: A4 landscape; margin: 8mm; }
             body { background: #fff; }
-            #page-header, #page-footer { display: none; }
-            .timetable td { height: 50px; }
+            #page-header, #page-footer, #legend-bar { display: none; }
+            .timetable { min-width: auto; }
+            .timetable thead { display: table-header-group; }
+            .timetable tr { page-break-inside: avoid; break-inside: avoid; }
+            .timetable td { height: auto; min-height: 38px; padding: 2px 3px; vertical-align: top; }
+            .course-block { font-size: 10px; margin: 1px 0; }
+            .course-block .c-name { font-size: 10px; }
+            .course-block .c-info { font-size: 9px; }
+            .timetable .time-col { font-size: 10px; }
+            .timetable thead th { padding: 6px 0; font-size: 12px; }
         }
     </style>
+    <script src="js/api.js"></script>
+    <script>
+        // 登录守卫：未登录时退回登录页（角色由后端 API 权限控制）
+        if (!CourseQSortAPI.isMockMode() && !CourseQSortAPI.isAuthenticated()) {
+            window.location.replace('index.html');
+        }
+    </script>
 </head>
 <body>
 
@@ -100,7 +116,6 @@
     CourseQSort 排课规划器 — 课表仅供参考
 </div>
 
-<script src="js/api.js"></script>
 <script>
 (function() {
     // 从 localStorage 读取课表框架配置
@@ -112,12 +127,14 @@
                 if(tc && tc.periods && tc.periods.length>0) return tc;
             } catch(e){}
         }
-        // 默认 8 节课
-        return {periodsPerDay:8, periods:[
+        // 默认 11 节课
+        return {periodsPerDay:11, periods:[
             {name:'第1节',start:'08:00',end:'08:45'},{name:'第2节',start:'08:55',end:'09:40'},
             {name:'第3节',start:'10:00',end:'10:45'},{name:'第4节',start:'10:55',end:'11:40'},
             {name:'第5节',start:'14:00',end:'14:45'},{name:'第6节',start:'14:55',end:'15:40'},
-            {name:'第7节',start:'16:00',end:'16:45'},{name:'第8节',start:'16:55',end:'17:40'}
+            {name:'第7节',start:'16:00',end:'16:45'},{name:'第8节',start:'16:55',end:'17:40'},
+            {name:'第9节',start:'19:00',end:'19:45'},{name:'第10节',start:'19:55',end:'20:40'},
+            {name:'第11节',start:'20:50',end:'21:35'}
         ]};
     }
     var TC = loadTimetableConfig();
@@ -135,7 +152,7 @@
     if (source === 'admin') {
         backBtn.addEventListener('click', function() { window.location.href = 'admin.html'; });
     } else {
-        backBtn.addEventListener('click', function() { window.location.href = 'index.html'; });
+        backBtn.addEventListener('click', function() { window.location.href = 'student.html'; });
     }
 
     var loadingEl = document.getElementById('loading-msg');
@@ -257,7 +274,9 @@
         subtitle.textContent = '方案 #' + planId;
         CourseQSortAPI.admin.getSchedulePlan(parseInt(planId))
             .then(function(plan) {
+                console.log('[timetable] plan loaded:', plan);
                 allEntries = plan.entries || [];
+                console.log('[timetable] entries count:', allEntries.length);
                 // 找出最大周数
                 var weeks = allEntries.map(function(e) { return e.week || 1; });
                 if (weeks.length > 0) {
@@ -266,8 +285,9 @@
                 buildWeekSelector();
                 goWeek(curWeek);
             })
-            .catch(function() {
-                loadingEl.innerHTML = '<p class="text-danger">加载方案失败，请确认该方案存在</p>';
+            .catch(function(err) {
+                console.error('[timetable] load plan failed:', err);
+                loadingEl.innerHTML = '<p class="text-danger">加载方案失败，请确认该方案存在<br><small>' + (err&&err.message||'') + '</small></p>';
             });
     } else {
         subtitle.textContent = '我的课表';

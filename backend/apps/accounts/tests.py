@@ -27,10 +27,10 @@ class AuthApiTests(TestCase):
         )
         return user
 
-    def _login(self, username):
+    def _login(self, username, password="secret123"):
         return self.client.post(
             "/api/v1/auth/login/",
-            {"username": username, "password": "secret123"},
+            {"username": username, "password": password},
             format="json",
         )
 
@@ -81,11 +81,7 @@ class AuthApiTests(TestCase):
     def test_login_rejects_invalid_password(self):
         User.objects.create_user(username="wrong-pass-user", password="secret123")
 
-        response = self.client.post(
-            "/api/v1/auth/login/",
-            {"username": "wrong-pass-user", "password": "bad-password"},
-            format="json",
-        )
+        response = self._login("wrong-pass-user", password="bad-password")
 
         self.assertEqual(response.status_code, 401)
         self.assertIn("detail", response.data)
@@ -129,7 +125,9 @@ class AuthApiTests(TestCase):
         user = self._create_student_user("tamper-user")
         login_response = self._login(user.username)
         access_token = login_response.data["access"]
-        tampered_token = access_token[:-1] + ("A" if access_token[-1] != "A" else "B")
+        header, payload, signature = access_token.split(".")
+        tampered_signature = ("A" if signature[0] != "A" else "B") + signature[1:]
+        tampered_token = ".".join([header, payload, tampered_signature])
 
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {tampered_token}")
         response = self.client.get("/api/v1/auth/me/")

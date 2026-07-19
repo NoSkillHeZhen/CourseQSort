@@ -44,18 +44,17 @@ class GenerateView(viewsets.ViewSet):
             progress=0.0,
         )
 
+        # 异步线程执行，立即返回给前端轮询
+        import threading
+
         from apps.scheduling.tasks import run_generate_sync
 
-        run_generate_sync(str(task.task_id))
+        task_id = str(task.task_id)
+        thread = threading.Thread(target=run_generate_sync, args=(task_id,), daemon=True)
+        thread.start()
 
-        task.refresh_from_db()
-        return Response(
-            {
-                "task_id": str(task.task_id),
-                "status": task.status,
-            },
-            status=status.HTTP_202_ACCEPTED,
-        )
+        serializer = TaskStatusSerializer(task)
+        return Response(serializer.data, status=status.HTTP_202_ACCEPTED)
 
 
 class TaskStatusView(viewsets.ViewSet):
@@ -144,14 +143,68 @@ class PlanViewSet(viewsets.ModelViewSet):
         plan = self.get_object()
         if plan.status == "PUBLISHED":
             return Response({"detail": "Plan already published"}, status=status.HTTP_400_BAD_REQUEST)
+
+        from apps.courses.models import CourseScheduleItem
+
+        entries = plan.entries.select_related("course", "teacher", "classroom").all()
+
+        if not entries:
+            return Response({"detail": "Plan has no entries"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 收集本方案涉及的所有课程 ID
+        course_ids = set(e.course_id for e in entries if e.course_id)
+
+        # 清除这些课程现有的排课条目
+        CourseScheduleItem.objects.filter(course_id__in=course_ids).delete()
+
+        # 按 (course, teacher, classroom, day_of_week, period) 分组，
+        # 合并连续周为 week_start~week_end
+        groups = {}
+        for e in entries:
+            if not e.course_id:
+                continue
+            key = (e.course_id, e.teacher_id, e.classroom_id, e.day_of_week, e.period)
+            if key not in groups:
+                groups[key] = []
+            groups[key].append(e.week or 1)
+
+        items = []
+        for (course_id, teacher_id, classroom_id, dow, period), weeks in groups.items():
+            weeks = sorted(set(weeks))
+            # 合并连续周
+            ws = weeks[0]
+            prev = weeks[0]
+            for w in weeks[1:] + [None]:
+                if w is None or w > prev + 1:
+                    items.append(
+                        CourseScheduleItem(
+                            course_id=course_id,
+                            teacher_id=teacher_id,
+                            classroom_id=classroom_id,
+                            day_of_week=dow,
+                            period=period,
+                            week_start=ws,
+                            week_end=prev,
+                        )
+                    )
+                    if w is not None:
+                        ws = w
+                prev = w if w is not None else prev
+
+        if items:
+            CourseScheduleItem.objects.bulk_create(items)
+
         plan.status = "PUBLISHED"
         plan.published_at = timezone.now()
         plan.save(update_fields=["status", "published_at"])
+
         return Response(
             {
                 "plan_id": plan.id,
                 "status": "PUBLISHED",
                 "published_at": plan.published_at.isoformat(),
+                "synced_courses": len(course_ids),
+                "synced_items": len(items),
             }
         )
 
@@ -212,6 +265,7 @@ class PlanViewSet(viewsets.ModelViewSet):
                 "teacher_id": data.get("teacher_id"),
             },
         )
+
         return Response(
             {
                 "item_id": entry.id,

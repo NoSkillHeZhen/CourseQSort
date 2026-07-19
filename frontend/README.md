@@ -1,162 +1,133 @@
-# CourseQSort 排课规划器 — 前端
+# CourseQSort Frontend
 
-大学生选课 + 教务排课辅助系统前端。
+CourseQSort 前端为纯 HTML / CSS / JavaScript 实现，包含学生端、教师端、教务管理端，以及一套基于 Playwright 的端到端测试。
 
----
+## 页面结构
 
-## 项目结构
-
-```
+```text
 frontend/
-├── index.html       # 登录页 — 登录（双模式）
-├── student.html     # 学生端 — 选课主页
-├── register.html    # 注册页
-├── teacher.html     # 教师端 — 课表查看
-├── schedule.html    # 学生端 — 课表打印
-├── timetable.html   # 课表视图
-├── admin.html       # 教务端 — 管理后台
-├── css/
-│   └── style.css
-├── js/
-│   ├── api.js       # API 对接层（双模式：Mock / 真实后端）
-│   ├── script.js    # 学生端 UI 控制器
-│   └── admin.js     # 教务端 UI 控制器
-└── README.md
+├── index.html            登录页，支持 Mock / JWT 双模式
+├── student.html          学生选课页
+├── teacher.html          教师课表页
+├── admin.html            教务管理页
+├── schedule.html         学生打印课表页
+├── timetable.html        课表视图页
+├── register.html         注册页
+├── css/style.css         样式
+├── js/api.js             API 适配层，支持 Mock 和后端模式
+├── js/script.js          学生端逻辑
+├── js/admin.js           教务端逻辑
+├── test-server.js        前端测试用静态服务器
+├── tests/frontend.spec.js
+├── tests/support.js
+├── playwright.config.js
+└── package.json
 ```
 
----
+## 运行方式
 
-## 双模式说明
+### 预览模式
 
-### 预览模式（默认）
+默认是 Mock 模式，不依赖后端。
 
-无需任何后端服务，直接在浏览器打开 HTML 文件即可使用全部功能。
-所有数据由 `api.js` 内置的 Mock 数据模拟。
+直接在浏览器打开 `frontend/index.html`：
 
-### 后端模式
+- 学生登录后跳转到 `student.html`
+- 教师登录后跳转到 `teacher.html`
+- 教务登录后跳转到 `admin.html`
 
-对接 Django REST Framework 后端。
+### 后端联调模式
 
-切换方式（浏览器控制台执行）：
+1. 启动后端：
+
+```bash
+cd backend
+python manage.py runserver 8000
+```
+
+2. 浏览器打开 `frontend/index.html`
+3. 切换到“后端模式”
+4. 使用后端账号登录
+
+如果需要在控制台手动切换，也可以执行：
 
 ```javascript
 CourseQSortAPI.setMockMode(false)
 ```
 
----
+## 当前前端能力
 
-## 快速开始
+- `index.html`
+  - Mock / JWT 双模式登录
+- `student.html`
+  - 课程列表分页
+  - 冲突标记
+  - 选课 / 退课
+  - 空闲时段推荐
+- `schedule.html`
+  - 打印课表
+- `teacher.html`
+  - 教师课表查看
+- `admin.html`
+  - 仪表盘统计
+  - 课程管理
+  - 教师 / 教室 / 专业 / 学生 / 班级资源管理
+  - 保护时段管理
+  - 排课方案生成、查看、发布
+  - 冲突分析
+  - 算法参数配置
 
-### 预览模式（推荐，无需后端）
+## 前端测试
 
-用浏览器直接打开 `index.html` → 选择「预览模式」→ 输入任意姓名和学号 → 进入选课系统。
+前端自动化测试使用 Playwright。
 
-或直接打开 `admin.html` 进入教务管理端。
-
-### HBuilderX 预览
-
-在 HBuilderX 中打开项目文件夹，右键 HTML 文件 →「运行」→「浏览器运行」。
-
-### 后端模式（需配合 Django 后端）
+安装依赖：
 
 ```bash
-# 1. 后端启动（假设后端在 localhost:8000）
-cd backend/backend_code
-python manage.py runserver 8000
-
-# 2. 浏览器打开 index.html，切换到「后端模式」
-# 3. 用 username + password 登录
+cd frontend
+npm ci
 ```
 
----
+首次本机运行如果缺少 Playwright 浏览器，可执行：
 
-## 功能清单
-
-| 页面 | 功能 | 预览模式 | 后端模式 |
-|------|------|---------|---------|
-| index.html | 双模式登录（JWT / 模拟） | 姓名+学号 | username+password |
-| student.html | 课程列表（分页） | 50门 Mock 课程 | GET /student/courses/ |
-| student.html | 冲突检测 + 标记 | 客户端位图 O(1) | 后端返回 conflict 字段 |
-| student.html | 选课 / 退课 | 本地模拟 | POST /select/ / DELETE /drop/ |
-| student.html | 空闲时段推荐 | 客户端计算 | GET /free-slots/ + /recommend/ |
-| schedule.html | 课表打印 | sessionStorage / API | GET /student/schedule/ |
-| admin.html | 概览统计 | Mock 数据 | GET /admin/courses/teachers/... |
-| admin.html | 课程管理 | Mock 50 门 | GET /admin/courses/ |
-| admin.html | 基础资源（教师/教室/专业） | Mock 数据 | GET /admin/teachers/classrooms/majors/ |
-| admin.html | 辅修时段保护 CRUD | Mock 数据 | GET/POST/DELETE /admin/protected-slots/ |
-| admin.html | 排课方案生成 + 评估 + 发布 | 模拟异步任务 | POST/GET /admin/schedule/... |
-| admin.html | 冲突预分析 + 柱状图 | 模拟异步任务 | POST/GET /admin/conflict-analysis/... |
-| admin.html | 算法参数配置（滑块调参） | Mock 配置 | GET/PUT /admin/algorithm-config/ |
-
----
-
-## 后端 API 端点（共 26 个）
-
-认证：
-```
-POST   /api/v1/auth/login/          # JWT 登录
-POST   /api/v1/auth/refresh/        # 刷新 Token
-POST   /api/v1/auth/logout/         # 登出
-GET    /api/v1/auth/me/             # 当前用户
+```bash
+npx playwright install chromium
 ```
 
-学生端：
-```
-GET    /api/v1/student/schedule/                             # 个人课表 + 位图
-GET    /api/v1/student/courses/?page=&page_size=             # 可选课程（分页）
-GET    /api/v1/student/courses/{id}/conflict-detail/         # 冲突详情
-POST   /api/v1/student/courses/{id}/select/                  # 选课
-DELETE /api/v1/student/courses/{id}/drop/                    # 退课
-GET    /api/v1/student/free-slots/                           # 空闲时段
-GET    /api/v1/student/free-slots/{day}/{period}/recommend/  # 空闲推荐
+运行测试：
+
+```bash
+npm run test:e2e
 ```
 
-教务端：
-```
-GET    /api/v1/admin/courses/                                 # 课程列表
-POST   /api/v1/admin/courses/import/                          # 批量导入
-GET    /api/v1/admin/teachers/                                # 教师列表
-GET    /api/v1/admin/classrooms/                              # 教室列表
-GET    /api/v1/admin/majors/                                  # 专业列表
-GET    /api/v1/admin/protected-slots/                         # 保护时段列表
-POST   /api/v1/admin/protected-slots/                         # 新增保护时段
-DELETE /api/v1/admin/protected-slots/{id}/                    # 删除保护时段
-PUT    /api/v1/admin/protected-slots/batch-update/            # 批量更新
-POST   /api/v1/admin/schedule/generate/                       # 触发排课
-GET    /api/v1/admin/schedule/tasks/{id}/                     # 排课进度
-GET    /api/v1/admin/schedule/plans/                          # 方案列表
-GET    /api/v1/admin/schedule/plans/{id}/evaluation/          # 方案评估
-POST   /api/v1/admin/schedule/plans/{id}/publish/             # 发布方案
-POST   /api/v1/admin/conflict-analysis/run/                   # 触发冲突分析
-GET    /api/v1/admin/conflict-analysis/tasks/{id}/            # 分析进度
-GET    /api/v1/admin/conflict-analysis/results/               # 分析结果列表
-GET    /api/v1/admin/conflict-analysis/results/{id}/pairs/    # 冲突课程对
-GET    /api/v1/admin/algorithm-config/                        # 获取算法配置
-PUT    /api/v1/admin/algorithm-config/                        # 更新算法配置
+可选命令：
+
+```bash
+npm run test:e2e:headed
+npm run test:e2e:ui
 ```
 
-详细接口合约见 `api/api_contract.md`（后端仓库）。
+当前测试覆盖：
 
----
+- 学生 Mock 登录跳转
+- 学生选课、退课、打印课表
+- 教务端创建课程
+- 教务端生成排课方案、查看冲突、保存算法参数
 
-## 团队协作建议
+## CI
 
-1. 将此仓库推送到 GitHub
-2. 后端同学依据 API 合约实现各端点
-3. 前端在预览模式下独立开发和调试 UI
-4. 后端接口就绪后，执行 `CourseQSortAPI.setMockMode(false)` 切到联调模式
-5. 前端代码所有数据都通过 `api.js` 的 API 层获取，切到后端模式无需改 UI 代码
+前端 GitHub Actions 工作流文件：
 
----
+- `.github/workflows/frontend-ci.yml`
 
-## 技术栈
+CI 流程包括：
 
-```
-纯 HTML / CSS / JavaScript（无框架依赖）
-Bootstrap 5（CDN）
-后端对接: Django REST Framework + SimpleJWT（JWT Token）
-```
+- `npm ci`
+- `npx playwright install --with-deps chromium`
+- `npm run test:e2e`
 
----
+## 注意事项
 
-> 开发阶段由 [Codex](https://codex.ai) 辅助完成
+- 当前登录入口是 `index.html`，不是 `login.html`
+- Playwright 测试使用 `test-server.js` 启动本地静态服务
+- 本地 Playwright 配置优先复用已安装的 Chrome / Edge；CI 则使用工作流安装的 Chromium

@@ -23,3 +23,8 @@ venv/
 /.vs
 .playwright-browsers/
 .tmp/
+.pytest_cache/
+
+# Agents
+.agents/
+CLAUDE.md
